@@ -1,3 +1,5 @@
+import datetime
+
 import streamlit as st
 
 from pawpal_system import Owner, Pet, Task, Scheduler, _parse_time, _format_time
@@ -17,6 +19,9 @@ if "pets" not in st.session_state:
 if "plans" not in st.session_state:
     st.session_state.plans: dict = {}
 
+if "selected_date_str" not in st.session_state:
+    st.session_state.selected_date_str: str = datetime.date.today().isoformat()
+
 # editing_task stores (pet_name, task_index) when a task is being edited
 if "editing_task" not in st.session_state:
     st.session_state.editing_task: tuple | None = None
@@ -27,6 +32,20 @@ if "editing_task" not in st.session_state:
 
 st.title("🐾 PawPal+")
 st.caption("A smart pet care scheduler for busy owners.")
+
+col_date, _ = st.columns([2, 3])
+with col_date:
+    selected_date: datetime.date = st.date_input(
+        "📅 Viewing date",
+        value=datetime.date.fromisoformat(st.session_state.selected_date_str),
+    )
+selected_date_str: str = selected_date.isoformat()
+
+# When the date changes, clear cached plans so the user generates fresh ones for the new day
+if selected_date_str != st.session_state.selected_date_str:
+    st.session_state.selected_date_str = selected_date_str
+    st.session_state.plans = {}
+
 st.divider()
 
 # ---------------------------------------------------------------------------
@@ -138,16 +157,19 @@ else:
     )
     if editing_this_pet:
         et = target_pet.tasks[edit_info[1]]
-        d_title    = et.title
-        d_category = et.category
-        d_duration = et.duration_minutes
-        d_priority = et.priority
-        d_earliest = et.earliest_start or ""
-        d_deadline = et.deadline or ""
-        d_notes    = et.notes
+        d_title      = et.title
+        d_category   = et.category
+        d_duration   = et.duration_minutes
+        d_priority   = et.priority
+        d_earliest   = et.earliest_start or ""
+        d_deadline   = et.deadline or ""
+        d_notes      = et.notes
+        d_frequency  = et.frequency or "none"
+        d_due_date   = et.due_date or ""
     else:
         d_title, d_category, d_duration = "", "walk", 20
         d_priority, d_earliest, d_deadline, d_notes = "high", "", "", ""
+        d_frequency, d_due_date = "none", ""
 
     form_label = f"✏️ Editing task #{edit_info[1]} for {target_pet.name}" \
         if editing_this_pet else "Add task"
@@ -171,9 +193,16 @@ else:
                 index=["low", "medium", "high", "critical"].index(d_priority),
             )
         with col3:
-            earliest = st.text_input("Earliest start (HH:MM, optional)", value=d_earliest)
-            deadline = st.text_input("Deadline (HH:MM, optional)", value=d_deadline)
-            notes    = st.text_input("Notes (optional)", value=d_notes)
+            earliest  = st.text_input("Earliest start (HH:MM, optional)", value=d_earliest)
+            deadline  = st.text_input("Deadline (HH:MM, optional)", value=d_deadline)
+            notes     = st.text_input("Notes (optional)", value=d_notes)
+            frequency = st.selectbox(
+                "Recurrence",
+                ["none", "daily", "weekly"],
+                index=["none", "daily", "weekly"].index(d_frequency),
+                help="Daily/weekly tasks auto-create the next occurrence when marked complete.",
+            )
+            due_date  = st.text_input("Due date (YYYY-MM-DD, optional)", value=d_due_date)
         submit_label = "Save changes" if editing_this_pet else "Add task"
         submitted = st.form_submit_button(submit_label)
 
@@ -206,6 +235,8 @@ else:
                 st.warning(f"⚠️ {deadline_warning}")
                 st.info("Fix the deadline or duration above and resubmit.")
             else:
+                frequency_val = frequency if frequency != "none" else None
+                due_date_val  = due_date.strip() or None
                 task = Task(
                     title=task_title.strip(),
                     category=category,
@@ -214,6 +245,8 @@ else:
                     earliest_start=earliest_val,
                     deadline=deadline_val,
                     notes=notes.strip(),
+                    frequency=frequency_val,
+                    due_date=due_date_val,
                 )
                 if editing_this_pet:
                     target_pet.tasks[edit_info[1]] = task
@@ -228,26 +261,88 @@ else:
                         f"({target_pet.task_count()} task(s) total)"
                     )
 
-    # ---- Task list with per-task Edit / Delete ----
+    # ---- Filter + Sort controls ----
     st.markdown("---")
+    st.markdown("**Task List**")
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        filter_cat = st.selectbox(
+            "Filter by category",
+            ["all", "walk", "feed", "medication", "enrichment", "grooming", "vet"],
+            key="filter_cat",
+        )
+    with fc2:
+        filter_status = st.selectbox(
+            "Filter by status",
+            ["all", "incomplete", "complete"],
+            key="filter_status",
+        )
+    with fc3:
+        sort_by_time = st.checkbox("Sort by earliest start", key="sort_by_time")
+
+    # ---- Task list with per-task Done / Edit / Delete ----
+    cat_filter    = None if filter_cat == "all" else filter_cat
+    status_filter = None if filter_status == "all" else (filter_status == "complete")
+
     for pet in st.session_state.pets:
         if not pet.tasks:
             continue
-        with st.expander(f"{pet.name} — {pet.task_count()} task(s)", expanded=True):
-            for idx, t in enumerate(pet.tasks):
-                cols = st.columns([3, 2, 1, 1, 1, 1])
-                cols[0].markdown(f"**{t.title}**")
-                cols[1].caption(f"{t.category} · {t.duration_minutes}min · {t.priority}")
-                cols[2].caption(t.earliest_start or "—")
-                cols[3].caption(t.deadline or "—")
-                if cols[4].button("✏️", key=f"edit_{pet.name}_{idx}", help="Edit"):
-                    st.session_state.editing_task = (pet.name, idx)
+
+        # Build (original_index, task) pairs — only tasks for the selected date
+        # (tasks without a due_date are standing/one-off tasks shown every day)
+        indexed = [
+            (i, t) for i, t in enumerate(pet.tasks)
+            if t.due_date is None or t.due_date == selected_date_str
+        ]
+        if cat_filter is not None:
+            indexed = [(i, t) for i, t in indexed if t.category == cat_filter]
+        if status_filter is not None:
+            indexed = [(i, t) for i, t in indexed if t.completed == status_filter]
+        if sort_by_time:
+            indexed = sorted(indexed, key=lambda x: _parse_time(x[1].earliest_start or "00:00"))
+
+        if not indexed:
+            continue
+
+        with st.expander(
+            f"{pet.name} — {len(indexed)} of {pet.task_count()} task(s) shown",
+            expanded=True,
+        ):
+            for orig_idx, t in indexed:
+                cols = st.columns([0.5, 2.5, 2, 1, 1, 1, 1])
+
+                # Completion checkbox — triggers recurrence when checked
+                checked = cols[0].checkbox(
+                    "done",
+                    value=t.completed,
+                    key=f"done_{pet.name}_{orig_idx}",
+                    label_visibility="collapsed",
+                )
+                if checked != t.completed:
+                    if checked:
+                        pet.complete_task(t)   # marks done + appends next occurrence if recurring
+                    else:
+                        t.completed = False
+                    st.session_state.plans.pop(pet.name, None)
                     st.rerun()
-                if cols[5].button("🗑️", key=f"del_{pet.name}_{idx}", help="Delete"):
-                    pet.tasks.pop(idx)
+
+                title_md = f"~~{t.title}~~" if t.completed else f"**{t.title}**"
+                cols[1].markdown(title_md)
+                recur_badge = f" · 🔁 {t.frequency}" if t.frequency else ""
+                cols[2].caption(
+                    f"{t.category} · {t.duration_minutes}min · {t.priority}{recur_badge}"
+                )
+                cols[3].caption(t.earliest_start or "—")
+                cols[4].caption(t.deadline or "—")
+
+                if cols[5].button("✏️", key=f"edit_{pet.name}_{orig_idx}", help="Edit"):
+                    st.session_state.editing_task = (pet.name, orig_idx)
+                    st.rerun()
+                if cols[6].button("🗑️", key=f"del_{pet.name}_{orig_idx}", help="Delete"):
+                    pet.tasks.pop(orig_idx)
                     st.session_state.plans.pop(pet.name, None)
                     if (st.session_state.editing_task and
-                            st.session_state.editing_task == (pet.name, idx)):
+                            st.session_state.editing_task == (pet.name, orig_idx)):
                         st.session_state.editing_task = None
                     st.rerun()
 
@@ -276,18 +371,27 @@ else:
             selected_pet = next(p for p in st.session_state.pets if p.name == schedule_for)
             scheduler = Scheduler()
 
-            # Only warn about truly impossible scheduling (both tasks have tight deadlines)
-            input_warnings = scheduler.check_input_conflicts(selected_pet.tasks)
-            for w in input_warnings:
-                st.warning(f"⚠️ {w}")
-
             try:
+                other_plans = [
+                    p for name, p in st.session_state.plans.items()
+                    if name != selected_pet.name
+                ]
+                day_tasks = [
+                    t for t in selected_pet.tasks
+                    if t.due_date is None or t.due_date == selected_date_str
+                ]
                 plan = scheduler.generate(
                     st.session_state.owner,
                     selected_pet,
-                    selected_pet.tasks,
+                    day_tasks,
+                    existing_plans=other_plans,
                 )
                 st.session_state.plans[selected_pet.name] = plan
+                if plan.unscheduled:
+                    st.warning(
+                        f"{len(plan.unscheduled)} task(s) could not be scheduled — "
+                        "see below for details."
+                    )
             except ValueError as exc:
                 st.error(f"Scheduling error: {exc}")
 
@@ -317,7 +421,7 @@ else:
         m3.metric("Unscheduled", f"{len(plan.unscheduled)} tasks")
 
         if plan.scheduled:
-            st.markdown(f"#### Today's Plan — {plan.pet.name}")
+            st.markdown(f"#### Plan for {selected_date_str} — {plan.pet.name}")
             for st_task in plan.tasks_sorted_by_time():
                 st.markdown(
                     f"**{st_task.start_time} – {st_task.end_time}** &nbsp; "

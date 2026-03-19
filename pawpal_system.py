@@ -118,16 +118,9 @@ class Pet:
             base += f" [needs: {needs}]"
         return base
 
-    def complete_task(self, task: Task) -> Optional[Task]:
-        """Mark a task complete; if it recurs, append the next occurrence to this pet's task list and return it.
-
-        @param task: the Task to mark as completed
-        @return: the next Task occurrence if the task recurs, else None
-        """
-        next_occurrence = task.mark_complete()
-        if next_occurrence is not None:
-            self.tasks.append(next_occurrence)
-        return next_occurrence
+    def complete_task(self, task: Task) -> None:
+        """Mark a task as completed."""
+        task.mark_complete()
 
     def filter_tasks(
         self,
@@ -164,22 +157,9 @@ class Task:
     due_date: Optional[str] = None    # "YYYY-MM-DD" — the date this task instance is due
     completed: bool = False
 
-    def mark_complete(self) -> Optional[Task]:
-        """Mark this task as completed and return the next occurrence if it recurs, else None.
-
-        Uses datetime.timedelta to advance due_date by 1 day (daily) or 7 days (weekly).
-
-        @return: a new Task copy with completed=False and an advanced due_date, or None if non-recurring
-        """
+    def mark_complete(self) -> None:
+        """Mark this task as completed."""
         self.completed = True
-        if self.frequency is None:
-            return None
-
-        delta = datetime.timedelta(days=1 if self.frequency == "daily" else 7)
-        base = datetime.date.fromisoformat(self.due_date) if self.due_date else datetime.date.today()
-        next_due = (base + delta).isoformat()
-
-        return replace(self, completed=False, due_date=next_due)
 
     def has_deadline(self) -> bool:
         """Return True when a hard deadline time has been set on this task."""
@@ -276,8 +256,18 @@ _VALID_PRIORITIES: frozenset[str] = frozenset(_PRIORITY_ORDER)
 class Scheduler:
     """Greedy single-day scheduler: mandatory tasks first, then flexible tasks by priority."""
 
-    def generate(self, owner: Owner, pet: Pet, tasks: list[Task]) -> DailyPlan:
-        """Validate inputs, sort tasks, greedily fill the owner's time window, and return a DailyPlan."""
+    def generate(
+        self,
+        owner: Owner,
+        pet: Pet,
+        tasks: list[Task],
+        existing_plans: list[DailyPlan] | None = None,
+    ) -> DailyPlan:
+        """Validate inputs, sort tasks, greedily fill the owner's time window, and return a DailyPlan.
+
+        @param existing_plans: plans already generated for other pets; their scheduled slots
+            are treated as blocked time so this pet's tasks won't overlap them.
+        """
         # --- Validation ---
         for task in tasks:
             if task.duration_minutes <= 0:
@@ -304,8 +294,17 @@ class Scheduler:
             date=datetime.date.today().isoformat(),
         )
 
+        # Collect occupied intervals from other pets so we can avoid them.
+        other_blocked: list[tuple[int, int]] = []
+        if existing_plans:
+            for ep in existing_plans:
+                for st in ep.scheduled:
+                    other_blocked.append(
+                        (_parse_time(st.start_time), _parse_time(st.end_time))
+                    )
+
         for task in sorted_tasks:
-            start_str = self._next_free_slot(plan, task)
+            start_str = self._next_free_slot(plan, task, other_blocked)
 
             if start_str is None:
                 plan.unscheduled.append((task, "Not enough time remaining in the day"))
@@ -361,33 +360,40 @@ class Scheduler:
             return f"High-priority task scheduled at {start_time}"
         return f"Scheduled at {start_time} after higher-priority tasks"
 
-    def _next_free_slot(self, plan: DailyPlan, task: Task) -> Optional[str]:
-        """Walk existing scheduled blocks to find the first gap that fits the task; return 'HH:MM' or None."""
-        # Determine earliest candidate minute for this task.
+    def _next_free_slot(
+        self,
+        plan: DailyPlan,
+        task: Task,
+        extra_blocked: list[tuple[int, int]] | None = None,
+    ) -> Optional[str]:
+        """Walk all occupied blocks (this plan + any other-pet blocks) to find the first gap that fits the task.
+
+        @param extra_blocked: list of (start_min, end_min) tuples from other pets' plans
+        @return: 'HH:MM' start time or None if no slot is available
+        """
         cursor_min = _parse_time(plan.owner.day_start)
         if task.earliest_start is not None:
             cursor_min = max(cursor_min, _parse_time(task.earliest_start))
 
         day_end_min = _parse_time(plan.owner.day_end)
 
-        # Walk scheduled blocks sorted by start_time to find gaps.
-        occupied = sorted(plan.scheduled, key=lambda s: _parse_time(s.start_time))
+        # Combine this plan's blocks with blocked intervals from other pets.
+        all_occupied: list[tuple[int, int]] = [
+            (_parse_time(st.start_time), _parse_time(st.end_time))
+            for st in plan.scheduled
+        ]
+        if extra_blocked:
+            all_occupied.extend(extra_blocked)
+        all_occupied.sort()
 
-        for st in occupied:
-            block_start = _parse_time(st.start_time)
-            block_end = _parse_time(st.end_time)
-
+        for block_start, block_end in all_occupied:
             if cursor_min + task.duration_minutes <= block_start:
-                # Gap before this block is large enough.
                 candidate = _format_time(cursor_min)
                 if self._fits_in_slot(task, candidate, plan.owner.day_end):
                     return candidate
-
-            # Advance cursor past this block.
             if block_end > cursor_min:
                 cursor_min = block_end
 
-        # Check the tail of the day after all scheduled blocks.
         if cursor_min + task.duration_minutes <= day_end_min:
             candidate = _format_time(cursor_min)
             if self._fits_in_slot(task, candidate, plan.owner.day_end):

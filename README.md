@@ -43,7 +43,7 @@ The `Scheduler` sorts tasks using a composite key — mandatory tasks (critical 
 `Pet.filter_tasks(category=None, completed=None)` returns a subset of a pet's tasks matching any combination of category and completion status. Used by the UI to surface incomplete medication tasks or show all walks at a glance.
 
 ### Recurring tasks
-Set `recur_every_hours` on any `Task` and the scheduler automatically expands it into correctly spaced copies across the owner's day window — one `Task(title="Feeding", recur_every_hours=6)` becomes three scheduled feedings without manual duplication. Completing a task with `frequency="daily"` or `frequency="weekly"` via `Pet.complete_task()` uses Python's `timedelta` to create the next occurrence automatically.
+Set `recur_every_hours` on any `Task` and the scheduler automatically expands it into correctly spaced copies across the owner's day window — one `Task(title="Feeding", recur_every_hours=6)` becomes three scheduled feedings without manual duplication. Tasks can also be given a `frequency` ("daily" or "weekly") and a `due_date`; the UI's date picker filters tasks by date so tomorrow's recurring task only appears when you navigate to tomorrow.
 
 ### Conflict detection
 Two layers of conflict checking, both returning warnings instead of crashing:
@@ -65,8 +65,34 @@ python main.py
 ### Running tests
 
 ```bash
-pytest
+python -m pytest
 ```
+
+## Testing PawPal+
+
+### Running the test suite
+
+```bash
+python -m pytest
+```
+
+### What the tests cover
+
+The suite in `tests/test_pawpal.py` covers 11 behaviors across five groups:
+
+| Group | Tests | What is verified |
+|---|---|---|
+| **Task completion** | 2 | `mark_complete()` sets `completed=True`; calling it twice is safe |
+| **Task addition** | 2 | `add_task()` increments count; the exact object is stored |
+| **Sorting correctness** | 2 | `tasks_sorted_by_time()` returns chronological order regardless of input order; critical tasks are always scheduled before flexible ones |
+| **Recurrence** | 2 | Completing a daily task marks it done without spawning a duplicate; `task_count` stays at 1 after completion |
+| **Conflict detection** | 3 | Overlapping cross-pet slots are flagged; non-overlapping slots are not; passing `existing_plans` to `generate()` eliminates double-booking |
+
+### Confidence level
+
+⭐⭐⭐⭐ (4 / 5)
+
+The core scheduling logic — priority ordering, deadline enforcement, earliest-start constraints, and cross-pet conflict avoidance — is well covered and all 11 tests pass. The main gap is edge-case coverage: very long task lists that overflow the day window, recurring tasks that span midnight, and owner windows shorter than a single task's duration are not yet tested. Those scenarios are handled defensively in the code (tasks that don't fit land in `unscheduled` with a reason) but are not verified by automated tests.
 
 ### Suggested workflow
 
