@@ -11,8 +11,16 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 def _parse_time(t: str) -> int:
-    """Convert 'HH:MM' to total minutes since midnight."""
-    h, m = map(int, t.split(":"))
+    """Convert a time string to total minutes since midnight.
+
+    Accepts 'HH:MM', 'H:MM', or bare 'H'/'HH' (treated as whole hours).
+    """
+    t = t.strip()
+    if ":" in t:
+        parts = t.split(":", 1)
+        h, m = int(parts[0]), int(parts[1])
+    else:
+        h, m = int(t), 0
     return h * 60 + m
 
 
