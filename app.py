@@ -17,9 +17,6 @@ if "owner" not in st.session_state:
 if "pet" not in st.session_state:
     st.session_state.pet: Pet | None = None
 
-if "tasks" not in st.session_state:
-    st.session_state.tasks: list[Task] = []
-
 if "plan" not in st.session_state:
     st.session_state.plan = None
 
@@ -60,6 +57,7 @@ if st.button("Save profile"):
         day_start=day_start,
         day_end=day_end,
     )
+    # Pet carries its own task list — tasks added via add_task() live here
     st.session_state.pet = Pet(
         name=pet_name,
         species=species,
@@ -103,8 +101,10 @@ with col3:
     notes       = st.text_input("Notes (optional)", value="")
 
 if st.button("Add task"):
-    st.session_state.tasks.append(
-        Task(
+    if not st.session_state.pet:
+        st.error("Save your owner & pet profile first (Section 1).")
+    else:
+        task = Task(
             title=task_title,
             category=category,
             duration_minutes=int(duration),
@@ -113,12 +113,19 @@ if st.button("Add task"):
             deadline=deadline.strip() or None,
             notes=notes.strip(),
         )
-    )
-    st.session_state.plan = None   # added a task → old schedule is stale
-    st.success(f"Added: {task_title} ({priority}, {duration} min)")
+        # Route through the domain method so pet.task_count() stays accurate
+        st.session_state.pet.add_task(task)
+        st.session_state.plan = None   # new task → old schedule is stale
+        st.success(
+            f"Added '{task_title}' to {st.session_state.pet.name} "
+            f"({st.session_state.pet.task_count()} task(s) total)"
+        )
 
-if st.session_state.tasks:
-    st.markdown(f"**{len(st.session_state.tasks)} task(s) queued:**")
+# Read the task list directly from the Pet object — single source of truth
+pet_tasks = st.session_state.pet.tasks if st.session_state.pet else []
+
+if pet_tasks:
+    st.markdown(f"**{st.session_state.pet.task_count()} task(s) assigned to {st.session_state.pet.name}:**")
     rows = [
         {
             "Title": t.title,
@@ -128,12 +135,12 @@ if st.session_state.tasks:
             "Earliest": t.earliest_start or "—",
             "Deadline": t.deadline or "—",
         }
-        for t in st.session_state.tasks
+        for t in pet_tasks
     ]
     st.table(rows)
 
     if st.button("Clear all tasks"):
-        st.session_state.tasks = []
+        st.session_state.pet.tasks.clear()   # clear via the Pet object
         st.session_state.plan = None
         st.rerun()
 else:
@@ -150,15 +157,16 @@ st.subheader("3. Generate Schedule")
 if st.button("Generate schedule", type="primary"):
     if not st.session_state.owner or not st.session_state.pet:
         st.error("Save your owner & pet profile first (Section 1).")
-    elif not st.session_state.tasks:
+    elif not st.session_state.pet.tasks:
         st.warning("Add at least one task before generating a schedule.")
     else:
         try:
             scheduler = Scheduler()
+            # Pass pet.tasks — the list populated by pet.add_task()
             st.session_state.plan = scheduler.generate(
                 st.session_state.owner,
                 st.session_state.pet,
-                st.session_state.tasks,
+                st.session_state.pet.tasks,
             )
         except ValueError as exc:
             st.error(f"Scheduling error: {exc}")
