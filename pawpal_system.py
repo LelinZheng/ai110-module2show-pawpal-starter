@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 
@@ -18,6 +18,43 @@ def _parse_time(t: str) -> int:
 def _format_time(minutes: int) -> str:
     """Convert total minutes since midnight to 'HH:MM'."""
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def expand_recurring_tasks(tasks: list[Task], day_start: str, day_end: str) -> list[Task]:
+    """Expand any Task with recur_every_hours set into multiple timed copies.
+
+    Each copy gets earliest_start spaced by the recurrence interval.
+    Non-recurring tasks are returned unchanged.
+
+    @param tasks: the original task list, possibly containing recurring tasks
+    @param day_start: owner's day start time as 'HH:MM'
+    @param day_end: owner's day end time as 'HH:MM'
+    @return: expanded list where recurring tasks have been replaced by timed copies
+    """
+    expanded: list[Task] = []
+    day_start_min = _parse_time(day_start)
+    day_end_min = _parse_time(day_end)
+
+    for task in tasks:
+        if task.recur_every_hours is None:
+            expanded.append(task)
+            continue
+
+        interval = task.recur_every_hours * 60
+        cursor = day_start_min
+        occurrence = 1
+        while cursor + task.duration_minutes <= day_end_min:
+            copy = replace(
+                task,
+                title=f"{task.title} ({occurrence})",
+                earliest_start=_format_time(cursor),
+                recur_every_hours=None,  # copies are not themselves recurring
+            )
+            expanded.append(copy)
+            cursor += interval
+            occurrence += 1
+
+    return expanded
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +109,24 @@ class Pet:
             base += f" [needs: {needs}]"
         return base
 
+    def filter_tasks(
+        self,
+        category: Optional[str] = None,
+        completed: Optional[bool] = None,
+    ) -> list[Task]:
+        """Return tasks matching the given filters; None means no filter on that field.
+
+        @param category: if provided, only return tasks whose category equals this value
+        @param completed: if provided, only return tasks whose completed flag matches
+        @return: filtered list of Task objects
+        """
+        result = self.tasks
+        if category is not None:
+            result = [t for t in result if t.category == category]
+        if completed is not None:
+            result = [t for t in result if t.completed == completed]
+        return result
+
 
 @dataclass
 class Task:
@@ -84,6 +139,7 @@ class Task:
     earliest_start: Optional[str] = None   # "HH:MM" or None
     deadline: Optional[str] = None         # "HH:MM" or None
     notes: str = ""
+    recur_every_hours: Optional[int] = None  # if set, task repeats this many hours apart
     completed: bool = False
 
     def mark_complete(self) -> None:
@@ -129,6 +185,10 @@ class DailyPlan:
         """Return True when every input task was successfully scheduled."""
         return len(self.unscheduled) == 0
 
+    def tasks_sorted_by_time(self) -> list[ScheduledTask]:
+        """Return scheduled tasks ordered chronologically by start_time."""
+        return sorted(self.scheduled, key=lambda s: _parse_time(s.start_time))
+
     def summary(self) -> str:
         """Return a formatted multi-line string showing the full day plan and any unscheduled tasks."""
         lines: list[str] = []
@@ -143,7 +203,7 @@ class DailyPlan:
 
         if self.scheduled:
             lines.append("")
-            for st in sorted(self.scheduled, key=lambda s: _parse_time(s.start_time)):
+            for st in self.tasks_sorted_by_time():
                 label = f"{st.start_time} \u2013 {st.end_time}"
                 title_col = f"{st.task.title:<20}"
                 priority_tag = f"[{st.task.priority}]"
@@ -200,6 +260,7 @@ class Scheduler:
                         f"before earliest_start {task.earliest_start!r}"
                     )
 
+        tasks = expand_recurring_tasks(tasks, owner.day_start, owner.day_end)
         sorted_tasks = self._sort_tasks(tasks)
 
         plan = DailyPlan(
@@ -309,3 +370,36 @@ class Scheduler:
                 return candidate
 
         return None
+
+    def detect_conflicts(self, plans: list[DailyPlan]) -> list[tuple[ScheduledTask, ScheduledTask]]:
+        """Return pairs of ScheduledTasks from different pets that overlap in time.
+
+        Two tasks conflict when one starts before the other ends:
+            a.start < b.end  AND  b.start < a.end
+        Only cross-pet conflicts are reported (same-pet overlaps can't happen
+        because generate() already prevents them).
+
+        @param plans: list of DailyPlan objects, one per pet
+        @return: list of conflicting (ScheduledTask, ScheduledTask) pairs
+        """
+        conflicts: list[tuple[ScheduledTask, ScheduledTask]] = []
+        # Flatten all scheduled tasks, tagged with their pet name
+        all_tasks: list[tuple[str, ScheduledTask]] = []
+        for plan in plans:
+            for st in plan.scheduled:
+                all_tasks.append((plan.pet.name, st))
+
+        for i in range(len(all_tasks)):
+            pet_a, st_a = all_tasks[i]
+            for j in range(i + 1, len(all_tasks)):
+                pet_b, st_b = all_tasks[j]
+                if pet_a == pet_b:
+                    continue  # same pet, skip
+                a_start = _parse_time(st_a.start_time)
+                a_end   = _parse_time(st_a.end_time)
+                b_start = _parse_time(st_b.start_time)
+                b_end   = _parse_time(st_b.end_time)
+                if a_start < b_end and b_start < a_end:
+                    conflicts.append((st_a, st_b))
+
+        return conflicts

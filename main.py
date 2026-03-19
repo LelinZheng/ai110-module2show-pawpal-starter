@@ -27,12 +27,15 @@ def main() -> None:
             deadline="08:30",
             notes="0.5 units, always before breakfast",
         ),
+        # Recurring feeding every 6 hours — expand_recurring_tasks inside
+        # Scheduler.generate() will produce timed copies across the day.
         Task(
-            title="Breakfast Feeding",
+            title="Feeding",
             category="feed",
             duration_minutes=10,
             priority="high",
             earliest_start="08:30",
+            recur_every_hours=6,
         ),
         Task(
             title="Enrichment Play",
@@ -40,13 +43,6 @@ def main() -> None:
             duration_minutes=20,
             priority="medium",
             earliest_start="10:00",
-        ),
-        Task(
-            title="Dinner Feeding",
-            category="feed",
-            duration_minutes=10,
-            priority="high",
-            earliest_start="17:00",
         ),
     ]
 
@@ -85,7 +81,15 @@ def main() -> None:
     ]
 
     # -----------------------------------------------------------------------
-    # Generate and print plans
+    # Populate each pet's task list so filter_tasks works on the source tasks
+    # -----------------------------------------------------------------------
+    for t in mochi_tasks:
+        mochi.add_task(t)
+    for t in buddy_tasks:
+        buddy.add_task(t)
+
+    # -----------------------------------------------------------------------
+    # Generate plans
     # -----------------------------------------------------------------------
     separator = "\n" + "=" * 50 + "\n"
 
@@ -95,10 +99,54 @@ def main() -> None:
           f"  ({owner.total_available_minutes()} min available)")
     print(separator.strip())
 
-    for pet, tasks in [(mochi, mochi_tasks), (buddy, buddy_tasks)]:
-        plan = scheduler.generate(owner, pet, tasks)
-        print(plan.summary())
-        print()
+    mochi_plan = scheduler.generate(owner, mochi, mochi_tasks)
+    buddy_plan = scheduler.generate(owner, buddy, buddy_tasks)
+
+    print(mochi_plan.summary())
+    print()
+    print(buddy_plan.summary())
+    print()
+
+    # -----------------------------------------------------------------------
+    # filter_tasks demo
+    # -----------------------------------------------------------------------
+    mochi_incomplete = mochi.filter_tasks(completed=False)
+    buddy_walks = buddy.filter_tasks(category="walk")
+    print(separator.strip())
+    print("  Task Filter Results")
+    print(separator.strip())
+    print(f"  Mochi — incomplete tasks : {len(mochi_incomplete)}")
+    print(f"  Buddy — walk tasks       : {len(buddy_walks)}")
+    print()
+
+    # -----------------------------------------------------------------------
+    # tasks_sorted_by_time demo — first 3 tasks for each pet
+    # -----------------------------------------------------------------------
+    print(separator.strip())
+    print("  Chronological Task Order (tasks_sorted_by_time)")
+    print(separator.strip())
+    for plan in (mochi_plan, buddy_plan):
+        print(f"  {plan.pet.name}:")
+        for st in plan.tasks_sorted_by_time():
+            print(f"    {st.start_time} – {st.end_time}  {st.task.title}")
+    print()
+
+    # -----------------------------------------------------------------------
+    # detect_conflicts
+    # -----------------------------------------------------------------------
+    conflicts = scheduler.detect_conflicts([mochi_plan, buddy_plan])
+    print(separator.strip())
+    print("  Cross-Pet Scheduling Conflicts")
+    print(separator.strip())
+    if not conflicts:
+        print("  No conflicts detected.")
+    else:
+        for st_a, st_b in conflicts:
+            print(
+                f"  CONFLICT: [{st_a.start_time}-{st_a.end_time}] {st_a.task.title}"
+                f"  <->  [{st_b.start_time}-{st_b.end_time}] {st_b.task.title}"
+            )
+    print()
 
 
 if __name__ == "__main__":
