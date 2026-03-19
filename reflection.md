@@ -148,11 +148,11 @@ Decision: the single-sort was adopted because the `sort_key` function with a com
 
 **a. How you used AI**
 
-AI was used across every phase of the project, but the role it played shifted as the work progressed.
+AI was used across every phase of the project, but the role it played shifted as the work progressed. Throughout, I worked exclusively with **Claude** via Claude Code, using a `.claude/agents/` setup that defined three specialist roles — `planner`, `coder`, and `reviewer` — each with its own system prompt and scope.
 
-During **design**, I used Copilot Chat with `#file:pawpal_system.py` to pressure-test the initial UML — asking "do you see any missing relationships or logic bottlenecks?" This surfaced the `_next_free_slot(plan, int)` signature problem early, before any real code existed, which saved a painful refactor later.
+During **design**, I directed the planner agent to pressure-test the initial UML against `pawpal_system.py` — asking "do you see any missing relationships or logic bottlenecks?" This surfaced the `_next_free_slot(plan, int)` signature problem early, before any real code existed, which saved a painful refactor later.
 
-During **implementation**, Inline Chat on specific methods was the most productive feature. Asking "rewrite `_sort_tasks` using a single `sorted()` call with a named key function" produced idiomatic Python that I could read and reason about line by line. For the conflict detection method, I used Edit Mode to scaffold `detect_conflicts` and then refined it by hand once I understood the interval-overlap math.
+During **implementation**, I used the coder agent for specific, bounded tasks: "rewrite `_sort_tasks` using a single `sorted()` call with a named key function." This produced idiomatic Python that I could read and reason about line by line. For the conflict detection method, I had the coder scaffold `detect_conflicts` and then refined it by hand once I understood the interval-overlap math.
 
 During **debugging**, the most useful prompts were narrow and specific: "this `_parse_time` call crashes on the string '7' — what is wrong with my split logic?" Broad prompts like "fix my scheduler" produced unhelpful rewrites that discarded design decisions I had made intentionally.
 
@@ -160,23 +160,23 @@ The most effective prompt pattern throughout was: **context + constraint + quest
 
 **b. Judgment and verification**
 
-The clearest moment of rejection was when AI suggested auto-spawning a new `Task` object every time a recurring task was marked complete. The suggestion felt intuitive — "daily task done → create tomorrow's copy" — but it created a real problem: the task list would grow every time the app reloaded and the user checked a box. Tasks would duplicate silently with no way for the owner to see or control it.
+The clearest moment of rejection was when Claude suggested auto-spawning a new `Task` object every time a recurring task was marked complete. The suggestion felt intuitive — "daily task done → create tomorrow's copy" — but it created a real problem: the task list would grow every time the app reloaded and the user checked a box. Tasks would duplicate silently with no way for the owner to see or control it.
 
 I rejected it and redesigned the recurrence model around `due_date` filtering instead. Tasks for future dates already exist in the list; they just don't appear until the date picker reaches that day. Completing today's task marks it done — nothing spawns. This is simpler, more transparent, and easier to test: `task_count` stays at 1 after completion, which is a clean assertion.
 
-I verified the AI suggestion was wrong by running `test_complete_task_does_not_spawn_new_task` — the test failed with the auto-spawn version and passed after the redesign, confirming the behaviour was what I intended.
+I verified the Claude suggestion was wrong by running `test_complete_task_does_not_spawn_new_task` — the test failed with the auto-spawn version and passed after the redesign, confirming the behaviour was what I intended.
 
-**c. Copilot features and session strategy**
+**c. Claude agent roles and session strategy**
 
-The three Copilot features that delivered the most value were:
+The `.claude/agents/` directory defined three agents, each with a focused responsibility:
 
-1. **Inline Chat on a specific method** — keeping the scope narrow meant suggestions were targeted and easy to accept or reject with full understanding.
-2. **`#file:` context in Chat** — asking questions grounded in the actual file prevented AI from hallucinating method signatures or field names that didn't exist.
-3. **Edit Mode for boilerplate-heavy sections** — generating the `st.form` layout in `app.py` and the pytest function stubs saved significant repetitive typing without requiring trust in any logic.
+1. **`planner`** — used for design review, UML critique, and architectural decisions. Keeping planning in a dedicated agent prevented it from drifting into writing code before the design was settled.
+2. **`coder`** — used for implementation tasks with a clear spec. Asking it to implement a method I had already designed meant the output was a translation of my intent, not an invention of its own.
+3. **`reviewer`** — used to audit completed code against the spec, catch edge cases, and check that the two-layer boundary (logic in `pawpal_system.py`, UI in `app.py`) had not been violated.
 
-Using separate chat sessions for each phase (design, implementation, testing, UI) helped because each session started with a clean context. There was no risk of an early design conversation's assumptions contaminating later implementation suggestions. It also forced me to re-read my own code before starting each session, which caught inconsistencies that I would have missed if I had stayed in one continuous conversation.
+Using separate agents for each role helped because each one started with a scoped context. There was no risk of an early design conversation's assumptions contaminating later implementation suggestions. It also forced me to re-read my own code before delegating each task, which caught inconsistencies I would have missed otherwise.
 
-The key discipline was treating each AI session as a **scoped consultation**, not an open-ended delegation. I defined what I wanted, reviewed every suggestion against the existing design, and wrote the final version myself.
+The key discipline was treating each agent as a **scoped consultant**, not an open-ended contractor. I defined what I wanted, reviewed every output against the existing design, and made the final call myself.
 
 ---
 
