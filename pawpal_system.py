@@ -396,25 +396,32 @@ class Scheduler:
         return None
 
     def check_input_conflicts(self, tasks: list[Task]) -> list[str]:
-        """Scan a task list for overlapping time windows before scheduling; return warning strings.
+        """Return warnings for pairs of tasks that physically cannot both be scheduled.
 
-        Checks every pair of tasks whose earliest_start values are both set. Two tasks
-        conflict when one's window starts before the other's ends:
-            a.start < b.start + b.duration  AND  b.start < a.start + a.duration
-        Returns plain-English warnings — never raises, never crashes.
+        earliest_start is a lower bound, not a fixed slot — two tasks sharing the
+        same earliest_start can always be placed back-to-back by the scheduler.
+        A true static conflict only exists when BOTH tasks have deadlines and the
+        shared window between their earliest-available time and the tighter deadline
+        is shorter than their combined duration (i.e., impossible in any order).
         """
-        anchored = [t for t in tasks if t.earliest_start is not None]
+        anchored = [t for t in tasks if t.earliest_start is not None and t.deadline is not None]
         warnings: list[str] = []
 
         for a, b in combinations(anchored, 2):
-            a_start = _parse_time(a.earliest_start)  # type: ignore[arg-type]
-            b_start = _parse_time(b.earliest_start)  # type: ignore[arg-type]
-            a_end = a_start + a.duration_minutes
-            b_end = b_start + b.duration_minutes
-            if a_start < b_end and b_start < a_end:
+            window_start = max(
+                _parse_time(a.earliest_start),  # type: ignore[arg-type]
+                _parse_time(b.earliest_start),  # type: ignore[arg-type]
+            )
+            window_end = min(
+                _parse_time(a.deadline),  # type: ignore[arg-type]
+                _parse_time(b.deadline),  # type: ignore[arg-type]
+            )
+            available = window_end - window_start
+            needed = a.duration_minutes + b.duration_minutes
+            if available < needed:
                 warnings.append(
-                    f"WARNING: '{a.title}' ({a.earliest_start}–{_format_time(a_end)}) "
-                    f"overlaps '{b.title}' ({b.earliest_start}–{_format_time(b_end)})"
+                    f"'{a.title}' and '{b.title}' cannot both fit before their deadlines "
+                    f"(only {available} min available, need {needed} min)"
                 )
         return warnings
 

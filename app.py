@@ -1,6 +1,6 @@
 import streamlit as st
 
-from pawpal_system import Owner, Pet, Task, Scheduler
+from pawpal_system import Owner, Pet, Task, Scheduler, _parse_time, _format_time
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 
@@ -15,7 +15,11 @@ if "pets" not in st.session_state:
     st.session_state.pets: list[Pet] = []
 
 if "plans" not in st.session_state:
-    st.session_state.plans: dict = {}   # pet_name → DailyPlan
+    st.session_state.plans: dict = {}
+
+# editing_task stores (pet_name, task_index) when a task is being edited
+if "editing_task" not in st.session_state:
+    st.session_state.editing_task: tuple | None = None
 
 # ---------------------------------------------------------------------------
 # Header
@@ -125,71 +129,126 @@ else:
     target_name = st.selectbox("Assign task to", pet_names)
     target_pet  = next(p for p in st.session_state.pets if p.name == target_name)
 
-    # Wrap in a form so every field change doesn't trigger a re-run
-    # and the task is only added once on explicit submit.
+    # Pre-fill defaults — used when editing an existing task
+    edit_info = st.session_state.editing_task
+    editing_this_pet = (
+        edit_info is not None
+        and edit_info[0] == target_pet.name
+        and edit_info[1] < len(target_pet.tasks)
+    )
+    if editing_this_pet:
+        et = target_pet.tasks[edit_info[1]]
+        d_title    = et.title
+        d_category = et.category
+        d_duration = et.duration_minutes
+        d_priority = et.priority
+        d_earliest = et.earliest_start or ""
+        d_deadline = et.deadline or ""
+        d_notes    = et.notes
+    else:
+        d_title, d_category, d_duration = "", "walk", 20
+        d_priority, d_earliest, d_deadline, d_notes = "high", "", "", ""
+
+    form_label = f"✏️ Editing task #{edit_info[1]} for {target_pet.name}" \
+        if editing_this_pet else "Add task"
+
     with st.form("add_task_form"):
+        if editing_this_pet:
+            st.info(f"Editing: **{d_title}** — submit to save changes, or cancel below.")
         col1, col2, col3 = st.columns(3)
         with col1:
-            task_title = st.text_input("Task title", value="")
+            task_title = st.text_input("Task title", value=d_title)
             category   = st.selectbox(
                 "Category",
                 ["walk", "feed", "medication", "enrichment", "grooming", "vet"],
+                index=["walk", "feed", "medication", "enrichment", "grooming", "vet"].index(d_category),
             )
         with col2:
-            duration = st.number_input("Duration (min)", min_value=1, max_value=240, value=20)
-            priority = st.selectbox("Priority", ["low", "medium", "high", "critical"], index=2)
+            duration = st.number_input("Duration (min)", min_value=1,
+                                       max_value=240, value=d_duration)
+            priority = st.selectbox(
+                "Priority", ["low", "medium", "high", "critical"],
+                index=["low", "medium", "high", "critical"].index(d_priority),
+            )
         with col3:
-            earliest = st.text_input("Earliest start (HH:MM, optional)", value="")
-            deadline = st.text_input("Deadline (HH:MM, optional)", value="")
-            notes    = st.text_input("Notes (optional)", value="")
-        add_task = st.form_submit_button("Add task")
+            earliest = st.text_input("Earliest start (HH:MM, optional)", value=d_earliest)
+            deadline = st.text_input("Deadline (HH:MM, optional)", value=d_deadline)
+            notes    = st.text_input("Notes (optional)", value=d_notes)
+        submit_label = "Save changes" if editing_this_pet else "Add task"
+        submitted = st.form_submit_button(submit_label)
 
-    if add_task:
+    if editing_this_pet and st.button("Cancel edit"):
+        st.session_state.editing_task = None
+        st.rerun()
+
+    if submitted:
         if not task_title.strip():
             st.error("Task title cannot be empty.")
         else:
-            task = Task(
-                title=task_title.strip(),
-                category=category,
-                duration_minutes=int(duration),
-                priority=priority,
-                earliest_start=earliest.strip() or None,
-                deadline=deadline.strip() or None,
-                notes=notes.strip(),
-            )
-            target_pet.add_task(task)
-            st.session_state.plans.pop(target_pet.name, None)  # stale plan
+            earliest_val = earliest.strip() or None
+            deadline_val = deadline.strip() or None
 
-            # Show input conflict warnings immediately after adding
-            scheduler = Scheduler()
-            warnings = scheduler.check_input_conflicts(target_pet.tasks)
-            st.success(
-                f"Added '{task.title}' to {target_pet.name} "
-                f"({target_pet.task_count()} task(s) total)"
-            )
-            for w in warnings:
-                st.warning(f"⚠️ {w}")
+            # Deadline validation: warn if task cannot finish before its deadline
+            deadline_warning = None
+            if earliest_val and deadline_val:
+                e_min = _parse_time(earliest_val)
+                d_min = _parse_time(deadline_val)
+                finish = e_min + int(duration)
+                if finish > d_min:
+                    deadline_warning = (
+                        f"Deadline {deadline_val} is too early — "
+                        f"'{task_title}' starting at {earliest_val} "
+                        f"would finish at {_format_time(finish)}, "
+                        f"after the deadline. Adjust the deadline or duration."
+                    )
 
-    # Task lists per pet
+            if deadline_warning:
+                st.warning(f"⚠️ {deadline_warning}")
+                st.info("Fix the deadline or duration above and resubmit.")
+            else:
+                task = Task(
+                    title=task_title.strip(),
+                    category=category,
+                    duration_minutes=int(duration),
+                    priority=priority,
+                    earliest_start=earliest_val,
+                    deadline=deadline_val,
+                    notes=notes.strip(),
+                )
+                if editing_this_pet:
+                    target_pet.tasks[edit_info[1]] = task
+                    st.session_state.editing_task = None
+                    st.session_state.plans.pop(target_pet.name, None)
+                    st.success(f"Updated '{task.title}' for {target_pet.name}.")
+                else:
+                    target_pet.add_task(task)
+                    st.session_state.plans.pop(target_pet.name, None)
+                    st.success(
+                        f"Added '{task.title}' to {target_pet.name} "
+                        f"({target_pet.task_count()} task(s) total)"
+                    )
+
+    # ---- Task list with per-task Edit / Delete ----
     st.markdown("---")
     for pet in st.session_state.pets:
-        if pet.tasks:
-            with st.expander(f"{pet.name} — {pet.task_count()} task(s)", expanded=True):
-                rows = [
-                    {
-                        "Title": t.title,
-                        "Category": t.category,
-                        "Duration": t.duration_minutes,
-                        "Priority": t.priority,
-                        "Earliest": t.earliest_start or "—",
-                        "Deadline": t.deadline or "—",
-                    }
-                    for t in pet.tasks
-                ]
-                st.table(rows)
-                if st.button(f"Clear {pet.name}'s tasks", key=f"clear_{pet.name}"):
-                    pet.tasks.clear()
+        if not pet.tasks:
+            continue
+        with st.expander(f"{pet.name} — {pet.task_count()} task(s)", expanded=True):
+            for idx, t in enumerate(pet.tasks):
+                cols = st.columns([3, 2, 1, 1, 1, 1])
+                cols[0].markdown(f"**{t.title}**")
+                cols[1].caption(f"{t.category} · {t.duration_minutes}min · {t.priority}")
+                cols[2].caption(t.earliest_start or "—")
+                cols[3].caption(t.deadline or "—")
+                if cols[4].button("✏️", key=f"edit_{pet.name}_{idx}", help="Edit"):
+                    st.session_state.editing_task = (pet.name, idx)
+                    st.rerun()
+                if cols[5].button("🗑️", key=f"del_{pet.name}_{idx}", help="Delete"):
+                    pet.tasks.pop(idx)
                     st.session_state.plans.pop(pet.name, None)
+                    if (st.session_state.editing_task and
+                            st.session_state.editing_task == (pet.name, idx)):
+                        st.session_state.editing_task = None
                     st.rerun()
 
 st.divider()
@@ -204,7 +263,6 @@ if not st.session_state.pets:
     st.info("Add pets and tasks first.")
 else:
     pets_with_tasks = [p for p in st.session_state.pets if p.tasks]
-
     schedule_options = [p.name for p in pets_with_tasks] if pets_with_tasks \
         else ["(no pets with tasks)"]
     schedule_for = st.selectbox("Generate schedule for", schedule_options)
@@ -218,10 +276,10 @@ else:
             selected_pet = next(p for p in st.session_state.pets if p.name == schedule_for)
             scheduler = Scheduler()
 
-            # Check input conflicts before scheduling and surface them
+            # Only warn about truly impossible scheduling (both tasks have tight deadlines)
             input_warnings = scheduler.check_input_conflicts(selected_pet.tasks)
             for w in input_warnings:
-                st.warning(f"⚠️ Input conflict detected: {w}")
+                st.warning(f"⚠️ {w}")
 
             try:
                 plan = scheduler.generate(
@@ -233,7 +291,7 @@ else:
             except ValueError as exc:
                 st.error(f"Scheduling error: {exc}")
 
-    # Cross-pet conflict detection — runs whenever ≥2 plans exist
+    # Cross-pet conflict detection
     active_plans = list(st.session_state.plans.values())
     if len(active_plans) >= 2:
         scheduler = Scheduler()
@@ -249,7 +307,6 @@ else:
                     f"overlaps **{st_b.task.title}** ({st_b.start_time}–{st_b.end_time})"
                 )
 
-    # Display the plan for the selected pet
     current_plan = st.session_state.plans.get(schedule_for)
     if current_plan:
         plan = current_plan
