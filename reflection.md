@@ -4,17 +4,13 @@
 
 **Core user actions**
 
-Three things a user needs to be able to do in PawPal+:
-
-1. **Register their pet and profile** — The user enters basic information about themselves (name, available hours in the day) and their pet (name, species, age, any special needs). This gives the scheduler the context it needs to make sensible decisions — a senior dog with mobility issues requires different task prioritization than a healthy kitten.
-
-2. **Add and manage care tasks** — The user creates tasks such as morning walk, evening feeding, or a medication dose, each with a duration, priority level, and optional time constraints (earliest start time or hard deadline). They should also be able to edit or remove tasks as their pet's routine changes day to day.
-
-3. **Generate and review today's schedule** — The user triggers the scheduler to produce an ordered daily plan that fits within their available time window. The app displays each task with its assigned time slot and a plain-English reason for why it was placed there, so the owner understands the plan and can trust it — or override it.
+1. **Register their pet and profile** — Enter owner name, daily time window, and pet details (name, species, age, special needs).
+2. **Add and manage care tasks** — Create tasks with duration, priority, and optional time constraints. Edit or delete tasks as the routine changes.
+3. **Generate and review today's schedule** — Trigger the scheduler to produce a prioritised daily plan with a reason for each placement.
 
 **a. Initial design**
 
-The system has six classes across two layers. The data layer uses Python dataclasses: `Owner` (name, daily time window), `Pet` (name, species, age, special needs), `Task` (title, category, duration, priority, optional earliest-start and deadline), `ScheduledTask` (wraps a Task with an assigned time slot and reason string), and `DailyPlan` (the output artifact — ordered scheduled list plus any tasks that couldn't fit). The logic layer has one regular class: `Scheduler`, which exposes a single public method `generate(owner, pet, tasks) -> DailyPlan` and keeps all algorithm details in private helpers. The UI (`app.py`) is intentionally kept thin — it only calls `Scheduler.generate()` and reads `DailyPlan`; no scheduling logic lives there.
+Six classes across two layers: data layer (`Owner`, `Pet`, `Task`, `ScheduledTask`, `DailyPlan`) using Python dataclasses, and a logic layer (`Scheduler`) with a single public method `generate() -> DailyPlan`. The UI (`app.py`) is kept thin — it calls the scheduler and renders results; no scheduling logic lives there.
 
 ```mermaid
 classDiagram
@@ -105,13 +101,9 @@ classDiagram
 
 **b. Design changes**
 
-After reviewing the skeleton, three problems were identified and fixed:
-
-1. **Removed `Owner.available_minutes`** — the original design had both an explicit `available_minutes` field *and* `day_start`/`day_end` on `Owner`. These two could silently conflict (e.g., `available_minutes=300` but the window is only 240 minutes). The field was removed; `total_available_minutes()` now derives the value directly from the time window, making `Owner` the single source of truth.
-
-2. **Changed `_next_free_slot(plan, duration_minutes)` → `_next_free_slot(plan, task)`** — passing only a bare integer meant the helper had no way to respect a task's `earliest_start` constraint. A medication due after 2pm could have been placed at 9am. Passing the full `Task` object gives the helper everything it needs to enforce both the duration and the earliest-start boundary.
-
-3. **Changed `unscheduled: list[Task]` → `list[tuple[Task, str]]`** — a plain list of tasks loses all context about *why* each task was dropped. The user would see tasks missing from their schedule with no explanation. Adding a reason string to every unscheduled entry means the UI can surface a clear message like "Evening walk skipped — only 5 minutes remaining in your day".
+1. **Removed `Owner.available_minutes`** — it could silently conflict with `day_start`/`day_end`. `total_available_minutes()` now derives the value directly from the time window.
+2. **`_next_free_slot(plan, int)` → `_next_free_slot(plan, task)`** — passing a bare integer meant `earliest_start` constraints were ignored. Passing the full `Task` enforces both duration and earliest-start.
+3. **`unscheduled: list[Task]` → `list[tuple[Task, str]]`** — a plain task list gave no explanation for why a task was dropped. Adding a reason string lets the UI show a clear message per skipped task.
 
 ---
 
@@ -119,28 +111,26 @@ After reviewing the skeleton, three problems were identified and fixed:
 
 **a. Constraints and priorities**
 
-The scheduler considers four constraints, in this priority order:
+The scheduler applies four constraints in this order:
 
-1. **Hard deadlines** — a medication due by 08:30 must finish before 08:30, full stop. Deadline tasks are placed first, sorted earliest-deadline-first, so the tightest windows are filled before anything else.
-2. **Priority level** — critical > high > medium > low. Within the mandatory group (deadline or critical), ties are broken by deadline time. Within the flexible group, ties are broken by duration (shorter tasks first, to maximise the number of tasks that fit).
-3. **Earliest-start constraints** — a task pinned to `earliest_start="17:00"` will never be placed before that time, even if a slot opens up earlier. This models real-world constraints like "dinner feeding only in the evening."
-4. **Owner's daily time budget** — the window from `day_start` to `day_end` is the hard outer boundary. Tasks that cannot fit are recorded in `DailyPlan.unscheduled` with a reason rather than silently dropped.
+1. **Hard deadlines** — deadline tasks are placed first, sorted earliest-deadline-first.
+2. **Priority level** — critical > high > medium > low. Flexible task ties broken by duration (shorter first).
+3. **Earliest-start** — a task with `earliest_start="17:00"` is never placed before that time.
+4. **Owner's time budget** — `day_start` to `day_end` is the hard boundary; tasks that don't fit go to `unscheduled` with a reason.
 
-Deadlines were prioritised above priority level because missing a medication deadline has real consequences (a pet's health), whereas placing a low-priority grooming task at the wrong time of day is merely inconvenient.
+Deadlines outrank priority because missing a medication has real health consequences; a grooming task at the wrong time is just inconvenient.
 
 **b. Tradeoffs**
 
 **Tradeoff 1 — Greedy first-fit vs. optimal placement**
 
-The scheduler uses a **greedy first-fit algorithm**: tasks are sorted once by priority/deadline, then placed into the first available gap in the timeline, left to right. This always produces a valid, non-overlapping schedule — but not the *optimal* one. A lower-priority short task can fill a gap that a later higher-priority task would have fit perfectly, pushing that task to a worse slot. A true optimal solver (e.g., OR-Tools constraint programming) would guarantee the best placement but is far more complex to implement and explain to a non-technical owner. Greedy is the right call here: day windows are long relative to task durations, greedy rarely misses, and a predictable schedule beats an opaque optimal one.
+The scheduler uses greedy first-fit: sort once, place left to right into the first available gap. It always produces a valid schedule but not the optimal one — a short low-priority task can block a slot a later high-priority task needed. An optimal solver (e.g. OR-Tools) would fix this but is far more complex. Greedy is the right call: day windows are large relative to task durations, and a predictable schedule beats an opaque optimal one.
 
-**Tradeoff 2 — Single composite sort key vs. explicit two-group split**
+**Tradeoff 2 — Single composite sort key vs. two-group split**
 
-When refining `_sort_tasks`, two approaches were evaluated. The original split tasks into a mandatory group and a flexible group, sorted each with its own `sort()` call, then concatenated. The suggested Pythonic rewrite collapses this into a single `sorted()` with a named `sort_key(t)` function returning a 4-tuple: `(group, deadline, priority_value, duration)`.
+The original `_sort_tasks` split tasks into mandatory and flexible groups, sorted each separately, then concatenated. The final version uses one `sorted()` call with a 4-tuple key `(group, deadline, priority_value, duration)`.
 
-The tradeoff: the split version makes the two different sort rules visually distinct — a reader can see immediately that mandatory tasks sort by deadline while flexible tasks sort by priority+duration. The single-sort version is shorter and easier to extend (add a new criterion by adding one tuple position), but a reader must understand that `float("inf")` as the deadline value for flexible tasks is what makes the two groups behave differently within one unified key.
-
-Decision: the single-sort was adopted because the `sort_key` function with a comment on each line is self-documenting, the explicit `float("inf")` sentinel is a standard Python idiom for "sort last," and future changes only require editing one function instead of two separate `sort()` calls. The two-group version's apparent clarity was surface-level — it hid the fact that flexible tasks silently inherited deadline=∞.
+The split version made the two sort rules visually obvious. The single-sort version is shorter and easier to extend, but requires understanding that `float("inf")` is the sentinel that pushes flexible tasks after mandatory ones. Single-sort was chosen because the named `sort_key` function is self-documenting and future changes only touch one place.
 
 ---
 
@@ -148,35 +138,29 @@ Decision: the single-sort was adopted because the `sort_key` function with a com
 
 **a. How you used AI**
 
-AI was used across every phase of the project, but the role it played shifted as the work progressed. Throughout, I worked exclusively with **Claude** via Claude Code, using a `.claude/agents/` setup that defined three specialist roles — `planner`, `coder`, and `reviewer` — each with its own system prompt and scope.
+I worked exclusively with **Claude** via Claude Code. I used a `.claude/agents/` setup with three specialist roles — `planner`, `coder`, and `reviewer` — each scoped to a specific type of task.
 
-During **design**, I directed the planner agent to pressure-test the initial UML against `pawpal_system.py` — asking "do you see any missing relationships or logic bottlenecks?" This surfaced the `_next_free_slot(plan, int)` signature problem early, before any real code existed, which saved a painful refactor later.
+- **Design**: the planner agent reviewed the UML and caught the `_next_free_slot(plan, int)` signature problem before any code was written.
+- **Implementation**: the coder agent handled bounded tasks ("rewrite `_sort_tasks` with a single `sorted()` call"), which I then reviewed and refined.
+- **Debugging**: narrow, specific prompts worked best — "this `_parse_time` call crashes on '7', what is wrong?" Broad prompts produced rewrites that discarded intentional design decisions.
 
-During **implementation**, I used the coder agent for specific, bounded tasks: "rewrite `_sort_tasks` using a single `sorted()` call with a named key function." This produced idiomatic Python that I could read and reason about line by line. For the conflict detection method, I had the coder scaffold `detect_conflicts` and then refined it by hand once I understood the interval-overlap math.
-
-During **debugging**, the most useful prompts were narrow and specific: "this `_parse_time` call crashes on the string '7' — what is wrong with my split logic?" Broad prompts like "fix my scheduler" produced unhelpful rewrites that discarded design decisions I had made intentionally.
-
-The most effective prompt pattern throughout was: **context + constraint + question**. For example: "In `Scheduler.generate()`, I want to avoid cross-pet double-booking without changing the public API — what is the minimal change to `_next_free_slot` to support a list of already-blocked intervals?"
+Most effective prompt pattern: **context + constraint + question**.
 
 **b. Judgment and verification**
 
-The clearest moment of rejection was when Claude suggested auto-spawning a new `Task` object every time a recurring task was marked complete. The suggestion felt intuitive — "daily task done → create tomorrow's copy" — but it created a real problem: the task list would grow every time the app reloaded and the user checked a box. Tasks would duplicate silently with no way for the owner to see or control it.
+Claude suggested auto-spawning a new `Task` every time a recurring task was marked complete. It seemed intuitive but caused silent task duplication — the list would grow on every checkbox tick with no way for the owner to control it.
 
-I rejected it and redesigned the recurrence model around `due_date` filtering instead. Tasks for future dates already exist in the list; they just don't appear until the date picker reaches that day. Completing today's task marks it done — nothing spawns. This is simpler, more transparent, and easier to test: `task_count` stays at 1 after completion, which is a clean assertion.
-
-I verified the Claude suggestion was wrong by running `test_complete_task_does_not_spawn_new_task` — the test failed with the auto-spawn version and passed after the redesign, confirming the behaviour was what I intended.
+I rejected it and switched to `due_date` filtering: tasks for future dates exist in the list but only appear when the date picker reaches that day. Completing a task just marks it done — nothing spawns. The test `test_complete_task_does_not_spawn_new_task` confirmed the redesign was correct.
 
 **c. Claude agent roles and session strategy**
 
-The `.claude/agents/` directory defined three agents, each with a focused responsibility:
+The `.claude/agents/` directory kept three roles separate:
 
-1. **`planner`** — used for design review, UML critique, and architectural decisions. Keeping planning in a dedicated agent prevented it from drifting into writing code before the design was settled.
-2. **`coder`** — used for implementation tasks with a clear spec. Asking it to implement a method I had already designed meant the output was a translation of my intent, not an invention of its own.
-3. **`reviewer`** — used to audit completed code against the spec, catch edge cases, and check that the two-layer boundary (logic in `pawpal_system.py`, UI in `app.py`) had not been violated.
+1. **`planner`** — design review and architectural decisions, never writing code.
+2. **`coder`** — implementation against a spec I had already defined.
+3. **`reviewer`** — auditing output for correctness and boundary violations (`pawpal_system.py` vs `app.py`).
 
-Using separate agents for each role helped because each one started with a scoped context. There was no risk of an early design conversation's assumptions contaminating later implementation suggestions. It also forced me to re-read my own code before delegating each task, which caught inconsistencies I would have missed otherwise.
-
-The key discipline was treating each agent as a **scoped consultant**, not an open-ended contractor. I defined what I wanted, reviewed every output against the existing design, and made the final call myself.
+Separate agents meant no early design assumptions leaked into later implementation. Each handoff forced me to re-read my own code, which caught inconsistencies early.
 
 ---
 
@@ -184,21 +168,19 @@ The key discipline was treating each agent as a **scoped consultant**, not an op
 
 **a. What you tested**
 
-The test suite covers five behaviour groups chosen because they represent the most likely failure points in the system:
+1. **Task completion** — `mark_complete` sets `completed=True`; downstream features (filtering, strikethrough) depend on this being correct.
+2. **Task addition** — `add_task` stores the right object and increments `task_count`.
+3. **Sorting** — tasks added out of order still come back chronologically; critical tasks always appear before flexible ones.
+4. **Recurrence** — completing a daily task marks it done without spawning a duplicate; `task_count` stays at 1.
+5. **Conflict detection** — overlapping cross-pet slots are flagged; non-overlapping are not; `existing_plans` eliminates double-booking.
 
-1. **Task completion** (`mark_complete`, `complete_task`) — the most basic state change in the app. If this is wrong, every downstream feature (filtering by status, recurring tasks, UI strikethrough) breaks silently.
-2. **Task addition** (`add_task`, `task_count`) — verifies the `Pet` data layer stores and counts tasks correctly. A regression here would corrupt every schedule.
-3. **Sorting correctness** (`tasks_sorted_by_time`, `_sort_tasks`) — the scheduler's entire value proposition is correct ordering. Tests add tasks out of order on purpose to prove the sort is real, not an accident of insertion order.
-4. **Recurrence** — tests confirm that completing a daily task marks it done without spawning a duplicate, and that `task_count` stays at 1. This directly guards the design decision to use `due_date` filtering rather than auto-spawning.
-5. **Conflict detection** (`detect_conflicts`, `generate(existing_plans=…)`) — three tests cover the full spectrum: conflicts are flagged when tasks overlap, not flagged when they don't, and eliminated entirely when `existing_plans` is passed to `generate()`.
-
-These tests were important because they are the behaviours most likely to break silently — a schedule that looks correct to the eye but has tasks in the wrong order, or a conflict that isn't caught, would not raise an exception. Only an explicit assertion catches it.
+These behaviours fail silently — a wrong order or a missed conflict won't raise an exception. Only explicit assertions catch them.
 
 **b. Confidence**
 
 ⭐⭐⭐⭐ (4 / 5)
 
-All 11 tests pass and cover the critical paths. The gap is edge-case coverage: an owner's day window shorter than a single task's duration, a task whose `earliest_start` is after `day_end`, and a task list where every task has a tight deadline that prevents any from fitting. These are handled defensively in the code — unscheduled tasks land in `DailyPlan.unscheduled` with a reason — but are not verified by automated tests. Adding those three tests would raise confidence to 5/5.
+All 11 tests pass. The gap is untested edge cases: day window shorter than a single task, `earliest_start` after `day_end`, all tasks with tight deadlines that prevent any from fitting. The code handles these defensively (tasks land in `unscheduled` with a reason) but they aren't verified by tests yet.
 
 ---
 
@@ -206,12 +188,12 @@ All 11 tests pass and cover the critical paths. The gap is edge-case coverage: a
 
 **a. What went well**
 
-The part of the project I am most satisfied with is the two-layer architecture: all scheduling logic lives in `pawpal_system.py` and the UI in `app.py` is genuinely thin — it calls methods and renders results, with zero scheduling logic of its own. This made every improvement clean. When cross-pet conflict avoidance was needed, I added `existing_plans` to `Scheduler.generate()` and the UI change was three lines. When the auto-spawn recurrence design was wrong, removing it required touching only `mark_complete()` and `complete_task()` — the UI checkbox handler needed no change at all. A clean boundary made the system resilient to design changes.
+The two-layer architecture. All scheduling logic lives in `pawpal_system.py`; `app.py` only calls methods and renders results. Every change stayed clean — adding cross-pet conflict avoidance touched three UI lines; removing auto-spawn recurrence touched only `mark_complete()` and `complete_task()`. A clear boundary made the system easy to change.
 
 **b. What you would improve**
 
-The date-picker approach to recurring tasks is correct but incomplete. Currently, a task with `frequency="daily"` only appears on its specific `due_date`. For truly recurring tasks — ones the owner expects to see every day without manually creating a copy per day — the right design is a **recurrence rule** that generates task instances on the fly during schedule generation rather than requiring a stored copy per date. I would redesign `expand_recurring_tasks` to accept a date and produce virtual copies for that day from a single stored rule.
+Recurring tasks still require a stored copy per date. A better design is a **recurrence rule** on `Task` that `expand_recurring_tasks` uses to generate virtual instances for any given date — no manual copies needed.
 
 **c. Key takeaway**
 
-The most important thing I learned is that **AI makes a great junior implementer but a poor architect**. It will produce working code for whatever interface you describe — but it will not protect your design decisions from the next prompt. When I asked for a "fix" without constraining the scope, suggestions routinely violated boundaries I had already established (adding logic to `app.py` that belonged in `pawpal_system.py`, auto-spawning tasks that should have been filtered). Staying in the role of lead architect meant writing down the design constraints first, giving AI a bounded task, and reviewing every output against those constraints before accepting it. The discipline is not in using AI less — it is in directing it precisely.
+**AI makes a great implementer but a poor architect.** It produces working code for whatever interface you describe, but won't protect design decisions from the next prompt. Vague requests like "fix my scheduler" returned rewrites that violated boundaries I had set. The discipline is giving Claude a bounded task with explicit constraints, then reviewing every output before accepting it.
