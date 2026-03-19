@@ -22,7 +22,6 @@ classDiagram
         +String name
         +String day_start
         +String day_end
-        +int available_minutes
         +total_available_minutes() int
     }
 
@@ -31,6 +30,11 @@ classDiagram
         +String species
         +float age_years
         +List~String~ special_needs
+        +List~Task~ tasks
+        +add_task(Task) None
+        +task_count() int
+        +complete_task(Task) None
+        +filter_tasks(category, completed) List~Task~
         +is_senior() bool
         +summary() String
     }
@@ -43,8 +47,13 @@ classDiagram
         +String earliest_start
         +String deadline
         +String notes
-        +is_mandatory() bool
+        +int recur_every_hours
+        +String frequency
+        +String due_date
+        +bool completed
+        +mark_complete() None
         +has_deadline() bool
+        +is_mandatory() bool
     }
 
     class ScheduledTask {
@@ -60,29 +69,38 @@ classDiagram
         +Pet pet
         +String date
         +List~ScheduledTask~ scheduled
-        +List~Task~ unscheduled
+        +List~Tuple~ unscheduled
         +int total_minutes_scheduled
-        +summary() String
         +is_complete() bool
+        +tasks_sorted_by_time() List~ScheduledTask~
+        +summary() String
     }
 
     class Scheduler {
-        +generate(Owner, Pet, List~Task~) DailyPlan
+        +generate(Owner, Pet, List~Task~, List~DailyPlan~) DailyPlan
+        +check_input_conflicts(List~Task~) List~String~
+        +detect_conflicts(List~DailyPlan~) List~Tuple~
         -_sort_tasks(List~Task~) List~Task~
         -_fits_in_slot(Task, String, String) bool
         -_build_reason(Task, String) String
-        -_next_free_slot(DailyPlan, int) String
+        -_next_free_slot(DailyPlan, Task, List~Tuple~) String
+    }
+
+    class expand_recurring_tasks {
+        <<function>>
+        +expand_recurring_tasks(List~Task~, String, String) List~Task~
     }
 
     Owner "1" --> "1" DailyPlan : provides constraints
+    Pet "1" --> "0..*" Task : owns
     Pet "1" --> "1" DailyPlan : provides context
-    Task "1..*" --> "1" DailyPlan : scheduled into
     DailyPlan "1" *-- "0..*" ScheduledTask : contains
     ScheduledTask "1" --> "1" Task : wraps
     Scheduler ..> DailyPlan : creates
     Scheduler ..> Owner : reads
     Scheduler ..> Pet : reads
     Scheduler ..> Task : reads
+    Scheduler ..> expand_recurring_tasks : calls
 ```
 
 **b. Design changes**

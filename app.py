@@ -280,9 +280,20 @@ else:
     with fc3:
         sort_by_time = st.checkbox("Sort by earliest start", key="sort_by_time")
 
-    # ---- Task list with per-task Done / Edit / Delete ----
+    # ---- Active filter status caption ----
     cat_filter    = None if filter_cat == "all" else filter_cat
     status_filter = None if filter_status == "all" else (filter_status == "complete")
+    active_filters = []
+    if cat_filter:
+        active_filters.append(f"category = {cat_filter}")
+    if filter_status != "all":
+        active_filters.append(f"status = {filter_status}")
+    if sort_by_time:
+        active_filters.append("sorted by earliest start")
+    if active_filters:
+        st.caption("Active filters: " + " · ".join(active_filters))
+
+    # ---- Task list with per-task Done / Edit / Delete ----
 
     for pet in st.session_state.pets:
         if not pet.tasks:
@@ -395,44 +406,123 @@ else:
             except ValueError as exc:
                 st.error(f"Scheduling error: {exc}")
 
-    # Cross-pet conflict detection
+    # ---------------------------------------------------------------------------
+    # Priority colour map — used in the schedule cards below
+    # ---------------------------------------------------------------------------
+    _PRIORITY_ICON = {
+        "critical": "🔴",
+        "high":     "🟠",
+        "medium":   "🟡",
+        "low":      "🟢",
+    }
+
+    # ---------------------------------------------------------------------------
+    # Cross-pet conflict detection — shown before the individual plan
+    # ---------------------------------------------------------------------------
     active_plans = list(st.session_state.plans.values())
     if len(active_plans) >= 2:
         scheduler = Scheduler()
         cross_conflicts = scheduler.detect_conflicts(active_plans)
         if cross_conflicts:
+            owner_name = st.session_state.owner.name if st.session_state.owner else "Owner"
             st.error(
-                f"⚠️ **{len(cross_conflicts)} cross-pet conflict(s)** — "
-                f"{st.session_state.owner.name} is double-booked:"
+                f"**{len(cross_conflicts)} scheduling conflict(s) detected — "
+                f"{owner_name} is double-booked.**  \n"
+                "Regenerate the conflicting pet's schedule (it will automatically "
+                "avoid already-booked slots)."
             )
             for st_a, st_b in cross_conflicts:
-                st.warning(
-                    f"**{st_a.task.title}** ({st_a.start_time}–{st_a.end_time}) "
-                    f"overlaps **{st_b.task.title}** ({st_b.start_time}–{st_b.end_time})"
-                )
+                with st.container(border=True):
+                    c1, c2 = st.columns(2)
+                    c1.warning(
+                        f"**{st_a.task.title}**  \n"
+                        f"{st_a.start_time} – {st_a.end_time}  \n"
+                        f"*{st_a.task.category} · {st_a.task.priority}*"
+                    )
+                    c2.warning(
+                        f"**{st_b.task.title}**  \n"
+                        f"{st_b.start_time} – {st_b.end_time}  \n"
+                        f"*{st_b.task.category} · {st_b.task.priority}*"
+                    )
+                    overlap_start = max(
+                        _parse_time(st_a.start_time), _parse_time(st_b.start_time)
+                    )
+                    overlap_end = min(
+                        _parse_time(st_a.end_time), _parse_time(st_b.end_time)
+                    )
+                    st.caption(
+                        f"Overlap: {_format_time(overlap_start)} – {_format_time(overlap_end)} "
+                        f"({overlap_end - overlap_start} min)  ·  "
+                        f"Fix: regenerate the second pet's schedule to let it skip this slot."
+                    )
+        else:
+            st.success("No scheduling conflicts — all pets' plans fit cleanly in the day.")
 
+    # ---------------------------------------------------------------------------
+    # Individual plan display
+    # ---------------------------------------------------------------------------
     current_plan = st.session_state.plans.get(schedule_for)
     if current_plan:
         plan = current_plan
 
-        m1, m2, m3 = st.columns(3)
+        # ---- Summary metrics ----
+        all_done = len(plan.unscheduled) == 0
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Scheduled", f"{len(plan.scheduled)} tasks")
         m2.metric("Total time", f"{plan.total_minutes_scheduled} min")
         m3.metric("Unscheduled", f"{len(plan.unscheduled)} tasks")
+        critical_count = sum(
+            1 for st_t in plan.scheduled if st_t.task.priority == "critical"
+        )
+        m4.metric("Critical tasks", critical_count)
 
+        if all_done and plan.scheduled:
+            st.success(
+                f"All tasks scheduled for {plan.pet.name} on {selected_date_str}."
+            )
+
+        # ---- Sorted schedule cards ----
         if plan.scheduled:
             st.markdown(f"#### Plan for {selected_date_str} — {plan.pet.name}")
+            st.caption(
+                "Sorted chronologically by start time · "
+                "Mandatory tasks (critical / deadline) placed first by the scheduler."
+            )
             for st_task in plan.tasks_sorted_by_time():
-                st.markdown(
-                    f"**{st_task.start_time} – {st_task.end_time}** &nbsp; "
-                    f"`{st_task.task.priority}` &nbsp; **{st_task.task.title}**  \n"
-                    f"*{st_task.reason}*"
-                )
+                icon = _PRIORITY_ICON.get(st_task.task.priority, "⚪")
+                with st.container(border=True):
+                    tc1, tc2 = st.columns([1, 3])
+                    tc1.markdown(
+                        f"**{st_task.start_time}**  \n"
+                        f"– {st_task.end_time}  \n"
+                        f"{icon} `{st_task.task.priority}`"
+                    )
+                    recur = f"  🔁 {st_task.task.frequency}" if st_task.task.category else ""
+                    deadline_note = (
+                        f"  ·  deadline {st_task.task.deadline}"
+                        if st_task.task.deadline else ""
+                    )
+                    tc2.markdown(f"**{st_task.task.title}**")
+                    tc2.caption(
+                        f"{st_task.task.category} · {st_task.task.duration_minutes} min"
+                        f"{deadline_note}{recur}"
+                    )
+                    tc2.markdown(f"*{st_task.reason}*")
 
+        # ---- Unscheduled tasks ----
         if plan.unscheduled:
-            st.markdown("#### ⚠️ Could Not Schedule")
+            st.markdown("#### Could Not Schedule")
+            st.caption(
+                "These tasks did not fit within the available time window. "
+                "Shorten their duration, remove a lower-priority task, or widen the owner's day."
+            )
             for task, reason in plan.unscheduled:
-                st.warning(f"**{task.title}** ({task.duration_minutes} min) — {reason}")
+                icon = _PRIORITY_ICON.get(task.priority, "⚪")
+                with st.container(border=True):
+                    uc1, uc2 = st.columns([1, 4])
+                    uc1.markdown(f"{icon} `{task.priority}`  \n{task.duration_minutes} min")
+                    uc2.markdown(f"**{task.title}**")
+                    uc2.error(f"Not scheduled: {reason}")
 
         with st.expander("Full plain-text summary"):
             st.text(plan.summary())
