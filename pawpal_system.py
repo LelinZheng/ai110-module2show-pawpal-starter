@@ -397,6 +397,31 @@ class Scheduler:
 
         return None
 
+    def check_input_conflicts(self, tasks: list[Task]) -> list[str]:
+        """Scan a task list for overlapping time windows before scheduling; return warning strings.
+
+        Checks every pair of tasks whose earliest_start values are both set. Two tasks
+        conflict when one's window starts before the other's ends:
+            a.start < b.start + b.duration  AND  b.start < a.start + a.duration
+        Returns plain-English warnings — never raises, never crashes.
+        """
+        warnings: list[str] = []
+        anchored = [t for t in tasks if t.earliest_start is not None]
+
+        for i in range(len(anchored)):
+            for j in range(i + 1, len(anchored)):
+                a, b = anchored[i], anchored[j]
+                a_start = _parse_time(a.earliest_start)  # type: ignore[arg-type]
+                b_start = _parse_time(b.earliest_start)  # type: ignore[arg-type]
+                a_end = a_start + a.duration_minutes
+                b_end = b_start + b.duration_minutes
+                if a_start < b_end and b_start < a_end:
+                    warnings.append(
+                        f"WARNING: '{a.title}' ({a.earliest_start}–{_format_time(a_end)}) "
+                        f"overlaps '{b.title}' ({b.earliest_start}–{_format_time(b_end)})"
+                    )
+        return warnings
+
     def detect_conflicts(self, plans: list[DailyPlan]) -> list[tuple[ScheduledTask, ScheduledTask]]:
         """Return pairs of ScheduledTasks from different pets that overlap in time.
 

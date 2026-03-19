@@ -216,5 +216,55 @@ def main() -> None:
     print()
 
 
+    # -----------------------------------------------------------------------
+    # Same-pet input conflict detection (check_input_conflicts)
+    # Two tasks pinned to the SAME earliest_start — deliberate collision.
+    # -----------------------------------------------------------------------
+    header("Same-Pet Input Conflict Detection (check_input_conflicts)")
+
+    collision_pet = Pet(name="Rex", species="dog", age_years=4.0)
+    collision_pet.add_task(Task(
+        title="Morning Walk",
+        category="walk",
+        duration_minutes=30,
+        priority="high",
+        earliest_start="08:00",   # 08:00 – 08:30
+    ))
+    collision_pet.add_task(Task(
+        title="Medication",
+        category="medication",
+        duration_minutes=10,
+        priority="critical",
+        earliest_start="08:15",   # 08:15 – 08:25  ← overlaps Morning Walk
+    ))
+    collision_pet.add_task(Task(
+        title="Breakfast Feed",
+        category="feed",
+        duration_minutes=10,
+        priority="high",
+        earliest_start="09:00",   # 09:00 – 09:10  ← no overlap
+    ))
+
+    print("\n  Input tasks (two intentionally overlap):")
+    for t in collision_pet.tasks:
+        end = f"{t.earliest_start} + {t.duration_minutes}min"
+        print(f"    [{t.priority:8}] {t.title:<20}  starts {t.earliest_start}  ({end})")
+
+    warnings = scheduler.check_input_conflicts(collision_pet.tasks)
+    print()
+    if warnings:
+        print(f"  check_input_conflicts() found {len(warnings)} warning(s):")
+        for w in warnings:
+            print(f"  ⚠  {w}")
+    else:
+        print("  No input conflicts detected.")
+
+    print("\n  Scheduler still runs — greedy algorithm resolves the overlap:")
+    collision_plan = scheduler.generate(owner, collision_pet, collision_pet.tasks)
+    for st in collision_plan.tasks_sorted_by_time():
+        print(f"    {st.start_time} – {st.end_time}  {st.task.title}")
+    print()
+
+
 if __name__ == "__main__":
     main()
