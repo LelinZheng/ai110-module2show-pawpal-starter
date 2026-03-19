@@ -57,6 +57,15 @@ class Pet:
     species: str            # "dog" | "cat" | "other"
     age_years: float
     special_needs: list[str] = field(default_factory=list)
+    tasks: list[Task] = field(default_factory=list)
+
+    def add_task(self, task: Task) -> None:
+        """Add a care task to this pet's task list."""
+        self.tasks.append(task)
+
+    def task_count(self) -> int:
+        """Return the number of tasks assigned to this pet."""
+        return len(self.tasks)
 
     def is_senior(self) -> bool:
         """Return True if the pet is considered senior for its species.
@@ -98,6 +107,11 @@ class Task:
     earliest_start: Optional[str] = None   # "HH:MM" or None
     deadline: Optional[str] = None         # "HH:MM" or None
     notes: str = ""
+    completed: bool = False
+
+    def mark_complete(self) -> None:
+        """Mark this task as completed."""
+        self.completed = True
 
     def has_deadline(self) -> bool:
         """Return True if this task has a hard deadline.
