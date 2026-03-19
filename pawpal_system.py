@@ -109,6 +109,17 @@ class Pet:
             base += f" [needs: {needs}]"
         return base
 
+    def complete_task(self, task: Task) -> Optional[Task]:
+        """Mark a task complete; if it recurs, append the next occurrence to this pet's task list and return it.
+
+        @param task: the Task to mark as completed
+        @return: the next Task occurrence if the task recurs, else None
+        """
+        next_occurrence = task.mark_complete()
+        if next_occurrence is not None:
+            self.tasks.append(next_occurrence)
+        return next_occurrence
+
     def filter_tasks(
         self,
         category: Optional[str] = None,
@@ -140,11 +151,26 @@ class Task:
     deadline: Optional[str] = None         # "HH:MM" or None
     notes: str = ""
     recur_every_hours: Optional[int] = None  # if set, task repeats this many hours apart
+    frequency: Optional[str] = None   # "daily" | "weekly" | None
+    due_date: Optional[str] = None    # "YYYY-MM-DD" — the date this task instance is due
     completed: bool = False
 
-    def mark_complete(self) -> None:
-        """Set completed to True, recording that this task has been done."""
+    def mark_complete(self) -> Optional[Task]:
+        """Mark this task as completed and return the next occurrence if it recurs, else None.
+
+        Uses datetime.timedelta to advance due_date by 1 day (daily) or 7 days (weekly).
+
+        @return: a new Task copy with completed=False and an advanced due_date, or None if non-recurring
+        """
         self.completed = True
+        if self.frequency is None:
+            return None
+
+        delta = datetime.timedelta(days=1 if self.frequency == "daily" else 7)
+        base = datetime.date.fromisoformat(self.due_date) if self.due_date else datetime.date.today()
+        next_due = (base + delta).isoformat()
+
+        return replace(self, completed=False, due_date=next_due)
 
     def has_deadline(self) -> bool:
         """Return True when a hard deadline time has been set on this task."""

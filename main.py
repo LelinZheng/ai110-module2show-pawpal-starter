@@ -7,6 +7,8 @@ Phase 3 focus: sorting and filtering
   - filter_tasks() is exercised with category, completed, and combined filters
   - tasks_sorted_by_time() shows the corrected chronological order post-schedule
 """
+import datetime
+
 from pawpal_system import Owner, Pet, Task, Scheduler
 
 
@@ -162,6 +164,55 @@ def main() -> None:
             print(f"  ⚠  {st_a.start_time}–{st_a.end_time}  {st_a.task.title}")
             print("     overlaps with")
             print(f"     {st_b.start_time}–{st_b.end_time}  {st_b.task.title}\n")
+    print()
+
+    # -----------------------------------------------------------------------
+    # Recurring Task Auto-Creation on Completion
+    # -----------------------------------------------------------------------
+    header("Recurring Task Auto-Creation on Completion")
+
+    # --- Daily recurrence: Mochi's Enrichment Play ---
+    today = datetime.date.today().isoformat()
+    enrichment_task = Task(
+        title="Enrichment Play",
+        category="enrichment",
+        duration_minutes=20,
+        priority="medium",
+        earliest_start="10:00",
+        frequency="daily",
+        due_date=today,
+    )
+    mochi_daily = Pet(name="Mochi", species="cat", age_years=3.0)
+    mochi_daily.add_task(enrichment_task)
+
+    print(f"\n  [Daily] Mochi's task count before complete_task(): {mochi_daily.task_count()}")
+    next_daily = mochi_daily.complete_task(enrichment_task)
+    print(f"  [Daily] Mochi's task count after  complete_task(): {mochi_daily.task_count()}")
+    print(f"\n  Original:        title={enrichment_task.title!r}, due_date={enrichment_task.due_date!r}, completed={enrichment_task.completed}")
+    print(f"  Next occurrence: title={next_daily.title!r}, due_date={next_daily.due_date!r}, completed={next_daily.completed}")
+    expected_daily = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    print(f"  Expected next due_date (+1 day): {expected_daily!r}  — match: {next_daily.due_date == expected_daily}")
+
+    # --- Weekly recurrence: Buddy's Grooming Brush ---
+    grooming_task = Task(
+        title="Grooming Brush",
+        category="grooming",
+        duration_minutes=15,
+        priority="low",
+        frequency="weekly",
+        due_date=today,
+    )
+    buddy_weekly = Pet(name="Buddy", species="dog", age_years=8.5,
+                       special_needs=["joint supplement"])
+    buddy_weekly.add_task(grooming_task)
+
+    print(f"\n  [Weekly] Buddy's task count before complete_task(): {buddy_weekly.task_count()}")
+    next_weekly = buddy_weekly.complete_task(grooming_task)
+    print(f"  [Weekly] Buddy's task count after  complete_task(): {buddy_weekly.task_count()}")
+    print(f"\n  Original:        title={grooming_task.title!r}, due_date={grooming_task.due_date!r}, completed={grooming_task.completed}")
+    print(f"  Next occurrence: title={next_weekly.title!r}, due_date={next_weekly.due_date!r}, completed={next_weekly.completed}")
+    expected_weekly = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
+    print(f"  Expected next due_date (+7 days): {expected_weekly!r}  — match: {next_weekly.due_date == expected_weekly}")
     print()
 
 
