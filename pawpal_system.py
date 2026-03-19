@@ -6,12 +6,12 @@ from typing import Optional
 @dataclass
 class Owner:
     name: str
-    day_start: str          # "HH:MM"
-    day_end: str            # "HH:MM"
-    available_minutes: int  # total daily time budget in minutes
+    day_start: str  # "HH:MM"
+    day_end: str    # "HH:MM"
+    # available_minutes removed — derived from day_start/day_end to avoid silent conflicts
 
     def total_available_minutes(self) -> int:
-        """Return the owner's total daily time budget in minutes."""
+        """Return total minutes between day_start and day_end."""
         pass
 
 
@@ -68,7 +68,8 @@ class DailyPlan:
     pet: Pet
     date: str
     scheduled: list[ScheduledTask] = field(default_factory=list)
-    unscheduled: list[Task] = field(default_factory=list)
+    # tuple[Task, str] — task + reason it could not be scheduled
+    unscheduled: list[tuple[Task, str]] = field(default_factory=list)
     total_minutes_scheduled: int = 0
 
     def summary(self) -> str:
@@ -106,9 +107,10 @@ class Scheduler:
         """Return a human-readable explanation for why a task was scheduled at start_time."""
         pass
 
-    def _next_free_slot(self, plan: DailyPlan, duration_minutes: int) -> Optional[str]:
+    def _next_free_slot(self, plan: DailyPlan, task: Task) -> Optional[str]:
         """
-        Find the next available start time in the plan that can fit duration_minutes.
+        Find the next available start time in the plan that can fit task.duration_minutes,
+        respecting task.earliest_start and the owner's day_end boundary.
         Returns "HH:MM" string or None if no slot is available.
         """
         pass
