@@ -332,24 +332,13 @@ class Scheduler:
         return plan
 
     def _sort_tasks(self, tasks: list[Task]) -> list[Task]:
-        """Split into mandatory and flexible groups, sort each, and return mandatory-first."""
-        mandatory = [t for t in tasks if t.is_mandatory()]
-        flexible = [t for t in tasks if not t.is_mandatory()]
-
-        # Sort mandatory: deadline asc (None last), then priority value asc.
-        mandatory.sort(
-            key=lambda t: (
-                _parse_time(t.deadline) if t.deadline is not None else float("inf"),
-                _PRIORITY_ORDER[t.priority],
-            )
-        )
-
-        # Sort flexible: priority value asc (high urgency first), then duration asc.
-        flexible.sort(
-            key=lambda t: (_PRIORITY_ORDER[t.priority], t.duration_minutes)
-        )
-
-        return mandatory + flexible
+        """Return tasks sorted by (mandatory-first, deadline, priority, duration)."""
+        def sort_key(t: Task) -> tuple:
+            # group=0 keeps mandatory tasks ahead of flexible (group=1)
+            group = 0 if t.is_mandatory() else 1
+            deadline = _parse_time(t.deadline) if t.deadline else float("inf")
+            return (group, deadline, _PRIORITY_ORDER[t.priority], t.duration_minutes)
+        return sorted(tasks, key=sort_key)
 
     def _fits_in_slot(self, task: Task, slot_start: str, day_end: str) -> bool:
         """Return True if the task fits in [slot_start, day_end] without overflowing and respects earliest_start."""

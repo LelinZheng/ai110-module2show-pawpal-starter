@@ -112,11 +112,17 @@ Deadlines were prioritised above priority level because missing a medication dea
 
 **b. Tradeoffs**
 
-The scheduler uses a **greedy first-fit algorithm**: tasks are sorted once by priority/deadline, then placed into the first available gap in the timeline, left to right. This is fast (O(n²) in the worst case due to gap-scanning) and always produces a valid, non-overlapping schedule — but it does not guarantee the *optimal* schedule.
+**Tradeoff 1 — Greedy first-fit vs. optimal placement**
 
-The tradeoff in practice: a lower-priority task that happens to be short can fill a gap that a higher-priority task arriving later in the sorted order would have fit perfectly, causing that higher-priority task to be pushed to a later, suboptimal slot. A true optimal scheduler would require backtracking or constraint-solving (e.g., OR-Tools), which would be significantly more complex to implement and explain.
+The scheduler uses a **greedy first-fit algorithm**: tasks are sorted once by priority/deadline, then placed into the first available gap in the timeline, left to right. This always produces a valid, non-overlapping schedule — but not the *optimal* one. A lower-priority short task can fill a gap that a later higher-priority task would have fit perfectly, pushing that task to a worse slot. A true optimal solver (e.g., OR-Tools constraint programming) would guarantee the best placement but is far more complex to implement and explain to a non-technical owner. Greedy is the right call here: day windows are long relative to task durations, greedy rarely misses, and a predictable schedule beats an opaque optimal one.
 
-This tradeoff is reasonable for PawPal+ because: (a) the day windows for pet care tasks are typically long relative to task durations, so greedy rarely misses; (b) the unscheduled list gives the owner full visibility when it does miss; and (c) simplicity matters — a schedule the owner can understand and predict is more trustworthy than an opaque optimal one.
+**Tradeoff 2 — Single composite sort key vs. explicit two-group split**
+
+When refining `_sort_tasks`, two approaches were evaluated. The original split tasks into a mandatory group and a flexible group, sorted each with its own `sort()` call, then concatenated. The suggested Pythonic rewrite collapses this into a single `sorted()` with a named `sort_key(t)` function returning a 4-tuple: `(group, deadline, priority_value, duration)`.
+
+The tradeoff: the split version makes the two different sort rules visually distinct — a reader can see immediately that mandatory tasks sort by deadline while flexible tasks sort by priority+duration. The single-sort version is shorter and easier to extend (add a new criterion by adding one tuple position), but a reader must understand that `float("inf")` as the deadline value for flexible tasks is what makes the two groups behave differently within one unified key.
+
+Decision: the single-sort was adopted because the `sort_key` function with a comment on each line is self-documenting, the explicit `float("inf")` sentinel is a standard Python idiom for "sort last," and future changes only require editing one function instead of two separate `sort()` calls. The two-group version's apparent clarity was surface-level — it hid the fact that flexible tasks silently inherited deadline=∞.
 
 ---
 
