@@ -101,13 +101,22 @@ After reviewing the skeleton, three problems were identified and fixed:
 
 **a. Constraints and priorities**
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+The scheduler considers four constraints, in this priority order:
+
+1. **Hard deadlines** — a medication due by 08:30 must finish before 08:30, full stop. Deadline tasks are placed first, sorted earliest-deadline-first, so the tightest windows are filled before anything else.
+2. **Priority level** — critical > high > medium > low. Within the mandatory group (deadline or critical), ties are broken by deadline time. Within the flexible group, ties are broken by duration (shorter tasks first, to maximise the number of tasks that fit).
+3. **Earliest-start constraints** — a task pinned to `earliest_start="17:00"` will never be placed before that time, even if a slot opens up earlier. This models real-world constraints like "dinner feeding only in the evening."
+4. **Owner's daily time budget** — the window from `day_start` to `day_end` is the hard outer boundary. Tasks that cannot fit are recorded in `DailyPlan.unscheduled` with a reason rather than silently dropped.
+
+Deadlines were prioritised above priority level because missing a medication deadline has real consequences (a pet's health), whereas placing a low-priority grooming task at the wrong time of day is merely inconvenient.
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+The scheduler uses a **greedy first-fit algorithm**: tasks are sorted once by priority/deadline, then placed into the first available gap in the timeline, left to right. This is fast (O(n²) in the worst case due to gap-scanning) and always produces a valid, non-overlapping schedule — but it does not guarantee the *optimal* schedule.
+
+The tradeoff in practice: a lower-priority task that happens to be short can fill a gap that a higher-priority task arriving later in the sorted order would have fit perfectly, causing that higher-priority task to be pushed to a later, suboptimal slot. A true optimal scheduler would require backtracking or constraint-solving (e.g., OR-Tools), which would be significantly more complex to implement and explain.
+
+This tradeoff is reasonable for PawPal+ because: (a) the day windows for pet care tasks are typically long relative to task durations, so greedy rarely misses; (b) the unscheduled list gives the owner full visibility when it does miss; and (c) simplicity matters — a schedule the owner can understand and predict is more trustworthy than an opaque optimal one.
 
 ---
 
