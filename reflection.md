@@ -148,13 +148,35 @@ Decision: the single-sort was adopted because the `sort_key` function with a com
 
 **a. How you used AI**
 
-- How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
-- What kinds of prompts or questions were most helpful?
+AI was used across every phase of the project, but the role it played shifted as the work progressed.
+
+During **design**, I used Copilot Chat with `#file:pawpal_system.py` to pressure-test the initial UML — asking "do you see any missing relationships or logic bottlenecks?" This surfaced the `_next_free_slot(plan, int)` signature problem early, before any real code existed, which saved a painful refactor later.
+
+During **implementation**, Inline Chat on specific methods was the most productive feature. Asking "rewrite `_sort_tasks` using a single `sorted()` call with a named key function" produced idiomatic Python that I could read and reason about line by line. For the conflict detection method, I used Edit Mode to scaffold `detect_conflicts` and then refined it by hand once I understood the interval-overlap math.
+
+During **debugging**, the most useful prompts were narrow and specific: "this `_parse_time` call crashes on the string '7' — what is wrong with my split logic?" Broad prompts like "fix my scheduler" produced unhelpful rewrites that discarded design decisions I had made intentionally.
+
+The most effective prompt pattern throughout was: **context + constraint + question**. For example: "In `Scheduler.generate()`, I want to avoid cross-pet double-booking without changing the public API — what is the minimal change to `_next_free_slot` to support a list of already-blocked intervals?"
 
 **b. Judgment and verification**
 
-- Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
+The clearest moment of rejection was when AI suggested auto-spawning a new `Task` object every time a recurring task was marked complete. The suggestion felt intuitive — "daily task done → create tomorrow's copy" — but it created a real problem: the task list would grow every time the app reloaded and the user checked a box. Tasks would duplicate silently with no way for the owner to see or control it.
+
+I rejected it and redesigned the recurrence model around `due_date` filtering instead. Tasks for future dates already exist in the list; they just don't appear until the date picker reaches that day. Completing today's task marks it done — nothing spawns. This is simpler, more transparent, and easier to test: `task_count` stays at 1 after completion, which is a clean assertion.
+
+I verified the AI suggestion was wrong by running `test_complete_task_does_not_spawn_new_task` — the test failed with the auto-spawn version and passed after the redesign, confirming the behaviour was what I intended.
+
+**c. Copilot features and session strategy**
+
+The three Copilot features that delivered the most value were:
+
+1. **Inline Chat on a specific method** — keeping the scope narrow meant suggestions were targeted and easy to accept or reject with full understanding.
+2. **`#file:` context in Chat** — asking questions grounded in the actual file prevented AI from hallucinating method signatures or field names that didn't exist.
+3. **Edit Mode for boilerplate-heavy sections** — generating the `st.form` layout in `app.py` and the pytest function stubs saved significant repetitive typing without requiring trust in any logic.
+
+Using separate chat sessions for each phase (design, implementation, testing, UI) helped because each session started with a clean context. There was no risk of an early design conversation's assumptions contaminating later implementation suggestions. It also forced me to re-read my own code before starting each session, which caught inconsistencies that I would have missed if I had stayed in one continuous conversation.
+
+The key discipline was treating each AI session as a **scoped consultation**, not an open-ended delegation. I defined what I wanted, reviewed every suggestion against the existing design, and wrote the final version myself.
 
 ---
 
@@ -162,13 +184,21 @@ Decision: the single-sort was adopted because the `sort_key` function with a com
 
 **a. What you tested**
 
-- What behaviors did you test?
-- Why were these tests important?
+The test suite covers five behaviour groups chosen because they represent the most likely failure points in the system:
+
+1. **Task completion** (`mark_complete`, `complete_task`) — the most basic state change in the app. If this is wrong, every downstream feature (filtering by status, recurring tasks, UI strikethrough) breaks silently.
+2. **Task addition** (`add_task`, `task_count`) — verifies the `Pet` data layer stores and counts tasks correctly. A regression here would corrupt every schedule.
+3. **Sorting correctness** (`tasks_sorted_by_time`, `_sort_tasks`) — the scheduler's entire value proposition is correct ordering. Tests add tasks out of order on purpose to prove the sort is real, not an accident of insertion order.
+4. **Recurrence** — tests confirm that completing a daily task marks it done without spawning a duplicate, and that `task_count` stays at 1. This directly guards the design decision to use `due_date` filtering rather than auto-spawning.
+5. **Conflict detection** (`detect_conflicts`, `generate(existing_plans=…)`) — three tests cover the full spectrum: conflicts are flagged when tasks overlap, not flagged when they don't, and eliminated entirely when `existing_plans` is passed to `generate()`.
+
+These tests were important because they are the behaviours most likely to break silently — a schedule that looks correct to the eye but has tasks in the wrong order, or a conflict that isn't caught, would not raise an exception. Only an explicit assertion catches it.
 
 **b. Confidence**
 
-- How confident are you that your scheduler works correctly?
-- What edge cases would you test next if you had more time?
+⭐⭐⭐⭐ (4 / 5)
+
+All 11 tests pass and cover the critical paths. The gap is edge-case coverage: an owner's day window shorter than a single task's duration, a task whose `earliest_start` is after `day_end`, and a task list where every task has a tight deadline that prevents any from fitting. These are handled defensively in the code — unscheduled tasks land in `DailyPlan.unscheduled` with a reason — but are not verified by automated tests. Adding those three tests would raise confidence to 5/5.
 
 ---
 
@@ -176,12 +206,12 @@ Decision: the single-sort was adopted because the `sort_key` function with a com
 
 **a. What went well**
 
-- What part of this project are you most satisfied with?
+The part of the project I am most satisfied with is the two-layer architecture: all scheduling logic lives in `pawpal_system.py` and the UI in `app.py` is genuinely thin — it calls methods and renders results, with zero scheduling logic of its own. This made every improvement clean. When cross-pet conflict avoidance was needed, I added `existing_plans` to `Scheduler.generate()` and the UI change was three lines. When the auto-spawn recurrence design was wrong, removing it required touching only `mark_complete()` and `complete_task()` — the UI checkbox handler needed no change at all. A clean boundary made the system resilient to design changes.
 
 **b. What you would improve**
 
-- If you had another iteration, what would you improve or redesign?
+The date-picker approach to recurring tasks is correct but incomplete. Currently, a task with `frequency="daily"` only appears on its specific `due_date`. For truly recurring tasks — ones the owner expects to see every day without manually creating a copy per day — the right design is a **recurrence rule** that generates task instances on the fly during schedule generation rather than requiring a stored copy per date. I would redesign `expand_recurring_tasks` to accept a date and produce virtual copies for that day from a single stored rule.
 
 **c. Key takeaway**
 
-- What is one important thing you learned about designing systems or working with AI on this project?
+The most important thing I learned is that **AI makes a great junior implementer but a poor architect**. It will produce working code for whatever interface you describe — but it will not protect your design decisions from the next prompt. When I asked for a "fix" without constraining the scope, suggestions routinely violated boundaries I had already established (adding logic to `app.py` that belonged in `pawpal_system.py`, auto-spawning tasks that should have been filtered). Staying in the role of lead architect meant writing down the design constraints first, giving AI a bounded task, and reviewing every output against those constraints before accepting it. The discipline is not in using AI less — it is in directing it precisely.
