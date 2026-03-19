@@ -10,21 +10,13 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 def _parse_time(t: str) -> int:
-    """Convert 'HH:MM' to total minutes since midnight.
-
-    :param t: Time string in "HH:MM" format.
-    :return: Total minutes since midnight.
-    """
+    """Convert 'HH:MM' to total minutes since midnight."""
     h, m = map(int, t.split(":"))
     return h * 60 + m
 
 
 def _format_time(minutes: int) -> str:
-    """Convert total minutes since midnight to 'HH:MM'.
-
-    :param minutes: Total minutes since midnight.
-    :return: Time string in "HH:MM" format.
-    """
+    """Convert total minutes since midnight to 'HH:MM'."""
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
@@ -34,7 +26,7 @@ def _format_time(minutes: int) -> str:
 
 @dataclass
 class Owner:
-    """Represents a pet owner with a defined availability window for the day."""
+    """A pet owner with a named daily availability window."""
 
     name: str
     day_start: str  # "HH:MM"
@@ -42,16 +34,13 @@ class Owner:
     # available_minutes removed — derived from day_start/day_end to avoid silent conflicts
 
     def total_available_minutes(self) -> int:
-        """Return total minutes between day_start and day_end.
-
-        :return: Integer number of minutes available in the owner's day window.
-        """
+        """Return the number of minutes between day_start and day_end."""
         return _parse_time(self.day_end) - _parse_time(self.day_start)
 
 
 @dataclass
 class Pet:
-    """Represents a pet with species, age, and optional special needs."""
+    """A pet with species, age, optional special needs, and an associated task list."""
 
     name: str
     species: str            # "dog" | "cat" | "other"
@@ -60,33 +49,21 @@ class Pet:
     tasks: list[Task] = field(default_factory=list)
 
     def add_task(self, task: Task) -> None:
-        """Add a care task to this pet's task list."""
+        """Append a care task to this pet's task list."""
         self.tasks.append(task)
 
     def task_count(self) -> int:
-        """Return the number of tasks assigned to this pet."""
+        """Return the number of tasks currently assigned to this pet."""
         return len(self.tasks)
 
     def is_senior(self) -> bool:
-        """Return True if the pet is considered senior for its species.
-
-        Senior thresholds: dog >= 7 years, cat >= 10 years, other >= 8 years.
-
-        :return: True if the pet qualifies as senior.
-        """
+        """Return True if the pet meets the senior age threshold for its species."""
         thresholds = {"dog": 7, "cat": 10}
         threshold = thresholds.get(self.species, 8)
         return self.age_years >= threshold
 
     def summary(self) -> str:
-        """Return a short human-readable description of the pet.
-
-        Format: "<name> (<species>, <age> yrs)" with " — senior" appended when
-        applicable, and " [needs: <item>, ...]" appended when special_needs is
-        non-empty.
-
-        :return: One-line summary string.
-        """
+        """Return a one-line description including name, species, age, and any special needs."""
         base = f"{self.name} ({self.species}, {self.age_years:.1f} yrs)"
         if self.is_senior():
             base += " \u2014 senior"
@@ -98,7 +75,7 @@ class Pet:
 
 @dataclass
 class Task:
-    """Represents a single care task to be scheduled in the owner's day."""
+    """A single pet care activity with timing constraints and a completion flag."""
 
     title: str
     category: str           # walk | feed | medication | enrichment | grooming | vet
@@ -110,27 +87,21 @@ class Task:
     completed: bool = False
 
     def mark_complete(self) -> None:
-        """Mark this task as completed."""
+        """Set completed to True, recording that this task has been done."""
         self.completed = True
 
     def has_deadline(self) -> bool:
-        """Return True if this task has a hard deadline.
-
-        :return: True when deadline is not None.
-        """
+        """Return True when a hard deadline time has been set on this task."""
         return self.deadline is not None
 
     def is_mandatory(self) -> bool:
-        """Return True if this task must be scheduled (critical priority or has a deadline).
-
-        :return: True when priority is "critical" or a deadline is set.
-        """
+        """Return True if the task must be scheduled (critical priority or has a deadline)."""
         return self.priority == "critical" or self.has_deadline()
 
 
 @dataclass
 class ScheduledTask:
-    """A Task that has been assigned a concrete start and end time."""
+    """A Task placed at a concrete time slot with an explanatory reason."""
 
     task: Task
     start_time: str     # "HH:MM"
@@ -138,16 +109,13 @@ class ScheduledTask:
     reason: str
 
     def duration_minutes(self) -> int:
-        """Return the duration of this scheduled task in minutes.
-
-        :return: Integer number of minutes between start_time and end_time.
-        """
+        """Return the number of minutes between start_time and end_time."""
         return _parse_time(self.end_time) - _parse_time(self.start_time)
 
 
 @dataclass
 class DailyPlan:
-    """The complete scheduling result for a single day."""
+    """The full scheduling result for one day: scheduled tasks plus any that couldn't fit."""
 
     owner: Owner
     pet: Pet
@@ -158,21 +126,11 @@ class DailyPlan:
     total_minutes_scheduled: int = 0
 
     def is_complete(self) -> bool:
-        """Return True if all tasks were successfully scheduled (nothing left unscheduled).
-
-        :return: True when unscheduled is empty.
-        """
+        """Return True when every input task was successfully scheduled."""
         return len(self.unscheduled) == 0
 
     def summary(self) -> str:
-        """Return a human-readable summary of the full day plan.
-
-        The summary includes owner/pet info, date, total scheduled time, a
-        chronological list of scheduled tasks with reasons, and a section for
-        unscheduled tasks when any exist.
-
-        :return: Multi-line formatted string.
-        """
+        """Return a formatted multi-line string showing the full day plan and any unscheduled tasks."""
         lines: list[str] = []
         lines.append("=== PawPal+ Daily Plan ===")
         lines.append(
@@ -221,28 +179,10 @@ _VALID_PRIORITIES: frozenset[str] = frozenset(_PRIORITY_ORDER)
 
 
 class Scheduler:
-    """Greedy single-day task scheduler for PawPal+.
-
-    <p>Tasks are sorted so mandatory items (critical priority or deadline-bound)
-    fill slots first, followed by flexible tasks ordered by priority then
-    duration. Tasks that cannot fit within the owner's window are recorded in
-    DailyPlan.unscheduled with a human-readable reason.</p>
-    """
+    """Greedy single-day scheduler: mandatory tasks first, then flexible tasks by priority."""
 
     def generate(self, owner: Owner, pet: Pet, tasks: list[Task]) -> DailyPlan:
-        """Produce a DailyPlan by scheduling tasks within the owner's available time window.
-
-        Mandatory tasks (critical priority or with deadlines) are placed first,
-        ordered by deadline. Remaining flexible tasks fill open slots by priority.
-        Tasks that cannot fit are recorded in DailyPlan.unscheduled.
-
-        :param owner: The owner whose day_start/day_end define the scheduling window.
-        :param pet: The pet whose care tasks are being scheduled.
-        :param tasks: List of Task objects to schedule.
-        :return: A populated DailyPlan.
-        :raises ValueError: If any task has duration_minutes <= 0, an unknown
-            priority value, or a deadline that precedes its earliest_start.
-        """
+        """Validate inputs, sort tasks, greedily fill the owner's time window, and return a DailyPlan."""
         # --- Validation ---
         for task in tasks:
             if task.duration_minutes <= 0:
@@ -296,17 +236,7 @@ class Scheduler:
         return plan
 
     def _sort_tasks(self, tasks: list[Task]) -> list[Task]:
-        """Return tasks sorted for scheduling: mandatory first (by deadline),
-        then flexible by priority descending, duration ascending.
-
-        Mandatory group sort key: (deadline minutes ascending, None deadlines go
-        last, then priority order value ascending).
-        Flexible group sort key: (priority order value ascending, duration_minutes
-        ascending).
-
-        :param tasks: Unsorted list of Task objects.
-        :return: New sorted list.
-        """
+        """Split into mandatory and flexible groups, sort each, and return mandatory-first."""
         mandatory = [t for t in tasks if t.is_mandatory()]
         flexible = [t for t in tasks if not t.is_mandatory()]
 
@@ -326,17 +256,7 @@ class Scheduler:
         return mandatory + flexible
 
     def _fits_in_slot(self, task: Task, slot_start: str, day_end: str) -> bool:
-        """Return True if the task fits within [slot_start, day_end] without overflow.
-
-        Also verifies that slot_start is not earlier than task.earliest_start when
-        that constraint is set.
-
-        :param task: The task to check.
-        :param slot_start: Proposed start time as "HH:MM".
-        :param day_end: Owner's day end boundary as "HH:MM".
-        :return: True if the task fits without overflowing day_end and respects
-            earliest_start.
-        """
+        """Return True if the task fits in [slot_start, day_end] without overflowing and respects earliest_start."""
         slot_start_min = _parse_time(slot_start)
         day_end_min = _parse_time(day_end)
 
@@ -347,12 +267,7 @@ class Scheduler:
         return slot_start_min + task.duration_minutes <= day_end_min
 
     def _build_reason(self, task: Task, start_time: str) -> str:
-        """Return a human-readable explanation for why a task was scheduled at start_time.
-
-        :param task: The task that was scheduled.
-        :param start_time: The assigned start time as "HH:MM".
-        :return: Short descriptive string.
-        """
+        """Return a short human-readable explanation for why the task was placed at start_time."""
         if task.priority == "critical":
             return "Critical task \u2014 must be completed today"
         if task.has_deadline():
@@ -362,16 +277,7 @@ class Scheduler:
         return f"Scheduled at {start_time} after higher-priority tasks"
 
     def _next_free_slot(self, plan: DailyPlan, task: Task) -> Optional[str]:
-        """Find the next available start time in the plan that can fit task.duration_minutes.
-
-        Walks through already-scheduled tasks (sorted by start_time) to identify
-        gaps, starting from the later of day_start and task.earliest_start.
-        Returns the first slot where _fits_in_slot() is True.
-
-        :param plan: The DailyPlan built so far (may already have scheduled tasks).
-        :param task: The task that needs a slot.
-        :return: "HH:MM" start time string, or None if no slot is available.
-        """
+        """Walk existing scheduled blocks to find the first gap that fits the task; return 'HH:MM' or None."""
         # Determine earliest candidate minute for this task.
         cursor_min = _parse_time(plan.owner.day_start)
         if task.earliest_start is not None:
